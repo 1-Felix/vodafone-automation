@@ -1,0 +1,8 @@
+services:
+  bridge-monitor:
+    build: .
+    container_name: vodafone-bridge-monitor
+    restart: unless-stopped
+    env_file: .env
+    # The container needs access to the router on the LAN
+    network_mode: host

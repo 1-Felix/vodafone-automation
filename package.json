@@ -1,0 +1,11 @@
+{
+  "name": "vodafone-bridge-mode",
+  "version": "1.0.0",
+  "description": "Automatically re-enables bridge mode on Vodafone Station (CGA6444VF) when it resets to router mode",
+  "main": "src/index.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node src/index.mjs --once"
+  }
+}
