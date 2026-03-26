@@ -1,6 +1,6 @@
 services:
   bridge-monitor:
-    build: .
+    image: ghcr.io/1-felix/vodafone-automation:latest
     container_name: vodafone-bridge-monitor
     restart: unless-stopped
     env_file: .env

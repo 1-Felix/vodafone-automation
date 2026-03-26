@@ -22,11 +22,40 @@ This tool automatically detects when bridge mode is lost and re-enables it via t
 ### Quick start
 
 ```bash
-git clone https://github.com/felixnext/vodafone-automation.git
+mkdir vodafone-bridge-monitor && cd vodafone-bridge-monitor
+
+# Create your .env file
+cat <<EOF > .env
+ROUTER_IP=192.168.100.1
+ROUTER_USER=admin
+ROUTER_PASS=your_router_password
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your/webhook
+CHECK_INTERVAL_MS=300000
+EOF
+
+# Create docker-compose.yml
+cat <<EOF > docker-compose.yml
+services:
+  bridge-monitor:
+    image: ghcr.io/1-felix/vodafone-automation:latest
+    container_name: vodafone-bridge-monitor
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host
+EOF
+
+# Start
+docker compose up -d
+```
+
+Or clone the repo if you want to build locally:
+
+```bash
+git clone https://github.com/1-Felix/vodafone-automation.git
 cd vodafone-automation
 cp .env.example .env
-# Edit .env with your router password and Discord webhook URL
-docker compose up -d
+# Edit .env with your credentials
+docker compose up -d --build
 ```
 
 ### Configuration
