@@ -6,6 +6,8 @@ const ROUTER_IP = process.env.ROUTER_IP ?? "192.168.100.1";
 const ROUTER_USER = process.env.ROUTER_USER ?? "admin";
 const ROUTER_PASS = process.env.ROUTER_PASS;
 const CHECK_INTERVAL_MS = parseInt(process.env.CHECK_INTERVAL_MS ?? "300000"); // 5 min
+const LOGIN_RETRIES = 3;
+const LOGIN_RETRY_DELAY_MS = 30_000; // 30s between retries
 const BASE = `http://${ROUTER_IP}`;
 
 async function api(path, opts = {}) {
@@ -180,7 +182,18 @@ async function runCheck() {
       Color.RED,
     );
 
-    const sessionCookie = await login();
+    let sessionCookie;
+    for (let attempt = 1; attempt <= LOGIN_RETRIES; attempt++) {
+      try {
+        sessionCookie = await login();
+        break;
+      } catch (err) {
+        log(`Login attempt ${attempt}/${LOGIN_RETRIES} failed: ${err.message}`);
+        if (attempt === LOGIN_RETRIES) throw err;
+        log(`Retrying in ${LOGIN_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise((r) => setTimeout(r, LOGIN_RETRY_DELAY_MS));
+      }
+    }
 
     try {
       const switched = await setBridgeMode(sessionCookie);
@@ -224,6 +237,10 @@ const once = process.argv.includes("--once");
 log("Vodafone Bridge Mode Monitor started");
 log(`Router: ${BASE}, User: ${ROUTER_USER}`);
 log(`Check interval: ${CHECK_INTERVAL_MS / 1000}s, Mode: ${once ? "single check" : "continuous"}`);
+
+if (!once) {
+  await notify("Monitor started, watching for bridge mode changes.", Color.GREEN);
+}
 
 await runCheck();
 

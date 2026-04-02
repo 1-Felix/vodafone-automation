@@ -22,8 +22,9 @@ export async function notify(message, color = 0xff0000) {
         ],
       }),
     });
-  } catch (err) {
-    log(`Discord webhook failed: ${err.message}`);
+  } catch {
+    // Silently ignore — webhook failures are expected when the network is
+    // disrupted (which is exactly when bridge mode gets lost).
   }
 }
 
