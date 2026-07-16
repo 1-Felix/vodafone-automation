@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.mjs",
-    "check": "node src/index.mjs --once"
+    "check": "node src/index.mjs --once",
+    "levels": "node src/levels.mjs",
+    "test": "node --test"
   }
 }

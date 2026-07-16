@@ -6,3 +6,6 @@ services:
     env_file: .env
     # The container needs access to the router on the LAN
     network_mode: host
+    volumes:
+      # Persists DOCSIS signal levels and the station event log (JSONL)
+      - ./data:/app/data

@@ -2,7 +2,7 @@
 
 The Vodafone Station (CGA6444VF) has a known issue where it randomly reverts from bridge mode back to router mode every few days. This causes double NAT problems if you're running your own router (e.g. GL.iNet Flint) behind it.
 
-This tool automatically detects when bridge mode is lost and re-enables it via the router's API — no browser automation needed.
+This tool automatically detects when bridge mode is lost and re-enables it via the router's API — no browser automation needed. It also continuously records DOCSIS signal levels and the Station's event log, so intermittent outages can be diagnosed with real data.
 
 ## How it works
 
@@ -10,6 +10,25 @@ This tool automatically detects when bridge mode is lost and re-enables it via t
 2. If bridge mode is lost: logs in using the same PBKDF2 auth scheme as the web UI, then sends `POST /api/v1/set_modem_mode` with `LanMode: bridge-static`
 3. Waits ~10 minutes for the router to reboot and verifies bridge mode is active again
 4. Sends Discord webhook notifications when bridge mode is lost and when it's restored
+
+### Signal collector
+
+On every check (while bridge mode is intact) the monitor also logs in and snapshots:
+
+- `data/levels.jsonl` — one line per check: per-channel downstream/upstream power, SNR, modulation, DOCSIS status, firmware version
+- `data/events.jsonl` — the Station's event log (DOCSIS T3/T4 timeouts, reboots, provisioning events), deduplicated across polls — the Station itself only keeps ~1 day of history
+
+Discord alerts fire on state changes: upstream TX power crossing 51 dBmV (Vodafone's "critical" threshold), new T3/T4 ranging timeouts (max 1 alert/hour), DOCSIS going offline/online, and firmware version changes (the prime suspect for bridge-mode resets).
+
+Disable with `COLLECTOR_ENABLED=false`.
+
+### Comparing wall sockets / checking signal health
+
+```bash
+node src/levels.mjs   # or: pnpm levels
+```
+
+prints a signal snapshot with a verdict. To find the best coax socket: plug the Station into a socket, wait until it's fully online (~3–5 min), run this, note the upstream power; repeat per socket. Lower upstream TX power = less attenuation = better socket.
 
 ## Setup
 
@@ -69,6 +88,9 @@ Copy `.env.example` to `.env` and adjust:
 | `ROUTER_PASS` | — | Router admin password (check the sticker on your router) |
 | `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for notifications |
 | `CHECK_INTERVAL_MS` | `300000` | Check interval in ms (default: 5 min) |
+| `COLLECTOR_ENABLED` | `true` | Set `false` to disable the DOCSIS signal collector |
+| `DATA_DIR` | `./data` | Where the collector writes `levels.jsonl` / `events.jsonl` |
+| `US_POWER_WARN_DBMV` | `51` | Upstream TX power alert threshold |
 
 ### Run without Docker
 
@@ -82,7 +104,7 @@ node src/index.mjs --once  # single check
 ## Tested on
 
 - **Router:** Vodafone Station (Arris CGA6444VF)
-- **Firmware:** 19.3B80-3.5.13
+- **Firmware:** 19.3B80-3.5.13, 5.0.2MB-R18-RT (RDK-B based)
 - **ISP:** Vodafone Germany (cable)
 
 May work on other Vodafone Station models with the same firmware/web interface.
