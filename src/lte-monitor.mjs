@@ -95,7 +95,7 @@ export function startLteMonitor(deps = {}) {
     } else if (connState === "CABLE_OK" && armed) {
       if (!lte.up) {
         lteDownSince ??= now;
-        if (now - lteDownSince > LINK_GRACE_MS) backupOk = false;
+        if (now - lteDownSince >= LINK_GRACE_MS) backupOk = false;
       } else {
         lteDownSince = null;
         if (backupOk === false || now - lastHealthAt >= SLOW_SAMPLE_MS) {

@@ -50,15 +50,13 @@ test("failover session lifecycle produces alerts and usage", async () => {
 test("dead Spitz link marks backup broken and recovers on relink", async () => {
   const script = [
     { wan: { up: true, autostart: true }, secondwan: { up: false, autostart: true, device: null }, counter: 0 },
-    { wan: { up: true, autostart: true }, secondwan: { up: false, autostart: true, device: null }, counter: 0 },
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
   ];
   const flint = fakeFlint(script);
   const sent = [];
   const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
-  await m.tick(); flint.advance(); // link down, grace starts
-  await m.tick(); flint.advance(); // still down past grace → broken
+  await m.tick(); flint.advance(); // link down, grace 0 in test → broken
   assert.ok(sent.some((s) => /broken/.test(s.msg)));
   assert.equal((await m.getStatus()).backupOk, false);
   await m.tick();                  // link back → immediate health ping clears
