@@ -35,6 +35,26 @@ SIM is billed pay-per-use at 3 ct/MB.
 4. Dashboard: self-hosted web app served by the collector on the NUC LAN, no auth
    (accepted: anyone on the LAN can toggle the fallback).
 
+## Post-approval discovery updates (2026-07-27, live Flint inspection)
+
+Read-only discovery on the Flint after spec approval changed four implementation
+details (semantics of the approved design are unchanged; "wan2" below reads as
+"secondwan"):
+
+- GL firmware pre-seeds a `kmwan.secondwan` member (metric 15, between wan=10 and
+  tethering=30). We use interface name `secondwan` on port `lan5` instead of a
+  hand-made `wan2` with metric 20.
+- kmwan active tracking pings 4 targets and would cost ~€10/month over LTE, not
+  ~3 ct. Therefore `kmwan.secondwan.track_mode='passive'` (like GL's modem member),
+  and the collector performs its own health ping through the Spitz every 10 min via
+  SSH (~1 MB ≈ 3 ct/month). "Backup broken" detection moves from kmwan tracking to
+  this health ping.
+- Flint LAN is 192.168.0.0/24, so the Spitz keeps its default 192.168.8.0/24 —
+  no subnet change needed.
+- `/etc/hotplug.d/iface/99-wanlog` is missing/empty on the Flint (lost since
+  2026-07-16); the runbook recreates it including the POST extension.
+  NUC = 192.168.0.37, dashboard port 8799.
+
 ## Architecture
 
 ```
