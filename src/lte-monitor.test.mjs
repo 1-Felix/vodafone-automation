@@ -7,6 +7,7 @@ import { join } from "node:path";
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "lte-test-"));
 process.env.LTE_LINK_GRACE_MS = "0";
 const { startLteMonitor } = await import("./lte-monitor.mjs");
+const { BALANCE_LOW_EUR } = await import("./lte.mjs");
 
 function fakeFlint(script) {
   let i = 0;
@@ -97,6 +98,7 @@ test("tracked balance: set anchor, decrements with usage, alerts when low", asyn
   assert.equal(status.balance.eur, 9.9);
   assert.equal(status.balance.low, true);
   assert.equal(status.balance.anchorEur, 10.2);
+  assert.equal(status.balance.lowEur, BALANCE_LOW_EUR); // dashboard draws the reserve line from this
   assert.ok(sent.some((s) => /balance low/i.test(s.msg)));
 });
 

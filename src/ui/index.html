@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>LTE Failover — Spitz Plus / CallYa</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1015'/%3E%3Crect x='6' y='2' width='4' height='5' fill='%23243039'/%3E%3Crect x='6' y='7' width='4' height='7' fill='%233ed9c4'/%3E%3C/svg%3E">
+<!--css-->
+</head>
+<body>
+
+<div class="rail" id="rail" aria-hidden="true"></div>
+
+<main class="page">
+
+  <header class="head" role="status">
+    <p class="eyebrow">Vodafone cable · Spitz Plus · CallYa prepaid</p>
+    <h1 class="state" id="state">Connecting</h1>
+    <p class="statesub" id="statesub">Reading the collector.</p>
+    <p class="flags">
+      <span class="flag" id="armed">fallback –</span>
+      <span class="flag" id="backup">backup –</span>
+      <span class="flag warn" id="guardflag" hidden></span>
+    </p>
+  </header>
+
+  <section class="meter" aria-labelledby="meter-h">
+    <h2 class="micro" id="meter-h">Guthaben</h2>
+
+    <div class="gauge" id="gauge" role="img" aria-label="Prepaid balance">
+      <div class="col">
+        <div class="ghost" id="ghost"></div>
+        <div class="fill" id="fill"></div>
+        <div class="low-mark" id="lowmark"></div>
+      </div>
+      <div class="ticks" id="ticks" aria-hidden="true"></div>
+    </div>
+
+    <div class="readout">
+      <p class="big n" id="balance">–</p>
+      <p class="cap" id="balancesub">Waiting for the first sync.</p>
+      <div class="session" id="session" hidden>
+        <p class="micro sig">On LTE now</p>
+        <p class="n" id="sessionline">–</p>
+      </div>
+    </div>
+
+    <dl class="totals">
+      <div class="tot"><dt class="micro">Today</dt><dd class="n" id="day">–</dd></div>
+      <div class="tot"><dt class="micro">Month</dt><dd class="n" id="month">–</dd></div>
+      <div class="tot"><dt class="micro">Total</dt><dd class="n" id="total">–</dd></div>
+    </dl>
+  </section>
+
+  <section class="controls" aria-labelledby="controls-h">
+    <h2 class="micro" id="controls-h">Controls</h2>
+
+    <div class="ctl">
+      <div class="ctltext">
+        <p class="ctlname" id="armname">Fallback</p>
+        <p class="cap" id="armcap">LTE takes over on its own when the cable drops.</p>
+      </div>
+      <button class="plate" id="armbtn" type="button">Arm fallback</button>
+    </div>
+
+    <div class="ctl" id="guardctl">
+      <div class="ctltext">
+        <p class="ctlname" id="guardname">LTE guard</p>
+        <p class="cap" id="guardcap">Checking the firewall chain.</p>
+      </div>
+      <button class="plate" id="guardbtn" type="button">…</button>
+    </div>
+
+    <form class="ctl" id="balform">
+      <div class="ctltext">
+        <label class="ctlname" for="balin">Sync balance</label>
+        <p class="cap">Dial <b class="n">*100#</b> on the CallYa SIM, then enter what it reports.</p>
+      </div>
+      <span class="field">
+        <input class="n" id="balin" inputmode="decimal" autocomplete="off" placeholder="12,34" aria-label="Balance in euro">
+        <button class="plate" type="submit">Save</button>
+      </span>
+    </form>
+  </section>
+
+  <section class="log" aria-labelledby="log-h">
+    <h2 class="micro" id="log-h">Failover log</h2>
+    <div class="scroll" id="histwrap" hidden>
+      <table>
+        <thead>
+          <tr><th>Started</th><th>Ran for</th><th class="r">Data</th><th class="r">Cost</th></tr>
+        </thead>
+        <tbody id="hist"></tbody>
+      </table>
+    </div>
+    <p class="cap" id="empty" hidden>No failover session recorded yet.</p>
+  </section>
+
+  <footer class="foot">
+    <span class="cap" id="updated">–</span>
+  </footer>
+
+</main>
+
+<!--js-->
+</body>
+</html>

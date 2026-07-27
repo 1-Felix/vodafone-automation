@@ -197,6 +197,7 @@ export function startLteMonitor(deps = {}) {
   }
 
   async function getStatus() {
+    const balanceEur = anchor ? computeBalance(anchor, usage) : null;
     return {
       connState: alertState.connState ?? null,
       armed: alertState.armed ?? null,
@@ -205,10 +206,11 @@ export function startLteMonitor(deps = {}) {
       totals: aggregateUsage(usage, new Date().toISOString()),
       history: sessions.slice(-20).reverse(),
       balance: anchor ? {
-        eur: computeBalance(anchor, usage),
+        eur: balanceEur,
         anchorEur: anchor.eur,
         anchorTs: anchor.ts,
-        low: computeBalance(anchor, usage) < BALANCE_LOW_EUR,
+        low: balanceEur < BALANCE_LOW_EUR,
+        lowEur: BALANCE_LOW_EUR,
       } : null,
       guard: {
         state: guardState,

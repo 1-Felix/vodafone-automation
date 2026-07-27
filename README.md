@@ -109,9 +109,13 @@ member `secondwan`):
 
 - Meters billable LTE bytes from the Flint's `lan5` counters over SSH and prices
   them at 3 ct/MB (`data/lte-usage.jsonl`, `data/lte-sessions.jsonl`).
-- Dashboard on the NUC LAN (`:8799`): connectivity badge, session/day/month/total
-  cost, failover history, and an arm/disarm kill switch (armed by default;
-  disarm = `ifdown secondwan` on the Flint, resets to armed on reboot).
+- Dashboard on the NUC LAN (`:8799`): link state, a prepaid-credit gauge showing
+  what is left and what this outage has spent, session/day/month/total cost,
+  failover history, and an arm/disarm kill switch (armed by default; disarm =
+  `ifdown secondwan` on the Flint, resets to armed on reboot). The page lives in
+  `src/ui/` as plain `index.html` / `app.css` / `app.js`; `dashboard.mjs` inlines
+  the three into one self-contained document at startup — no build step, no CDN,
+  so it renders fine while the cable is down.
 - Discord alerts: failover started/ended with cost summary, 30-min running
   updates, arm/disarm, backup-broken (health ping every 10 min), monthly drill.
 - Monthly drill (1st, ~04:00): pulls ~2 MB through LTE to verify the path and
@@ -119,7 +123,8 @@ member `secondwan`):
 - CallYa balance on the dashboard: tracked locally — sync the real balance once
   (dashboard input; check via MeinVodafone or `*100#` on a phone), then the
   collector decrements it by every metered LTE byte. Discord alert below €10
-  (`BALANCE_LOW_EUR`). (USSD from the Spitz itself is impossible: the EG120K
+  (`BALANCE_LOW_EUR`, also drawn as the dashed reserve line on the gauge and
+  returned as `balance.lowEur`). (USSD from the Spitz itself is impossible: the EG120K
   modem is LTE-only without IMS, so the network times out on `*100#`.)
 - LTE guard: only allowlisted devices (NUC, Felix-PC) may forward onto the LTE
   uplink — everything else is rejected while on failover. Allowlist lives in
