@@ -116,9 +116,19 @@ member `secondwan`):
   updates, arm/disarm, backup-broken (health ping every 10 min), monthly drill.
 - Monthly drill (1st, ~04:00): pulls ~2 MB through LTE to verify the path and
   keep the prepaid SIM active (≈ 6 ct/month).
+- CallYa balance on the dashboard: queried via USSD `*100#` through the Spitz
+  over SSH (free), daily and after each failover session; Discord alert below
+  €10 (`BALANCE_LOW_EUR`), stale marker when checks keep failing.
+- LTE guard: only allowlisted devices (NUC, Felix-PC) may forward onto the LTE
+  uplink — everything else is rejected while on failover. Allowlist lives in
+  `/etc/firewall.lte_guard` on the Flint (persistent iptables include). The
+  dashboard button opens LTE for all devices for `GUARD_OPEN_MINUTES` (default
+  60), then auto-relocks; Flint reboot and collector restart also relock.
 
 Design and runbook: `docs/superpowers/specs/2026-07-27-spitz-plus-callya-failover-design.md`
-and `docs/superpowers/plans/2026-07-27-spitz-callya-lte-failover.md`.
+and `docs/superpowers/plans/2026-07-27-spitz-callya-lte-failover.md`; balance +
+guard follow-up: `docs/superpowers/specs/2026-07-27-callya-balance-lte-guard-design.md`
+and `docs/superpowers/plans/2026-07-27-callya-balance-lte-guard.md`.
 
 ## Tested on
 
