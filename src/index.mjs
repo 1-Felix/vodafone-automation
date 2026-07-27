@@ -2,11 +2,15 @@ import { log } from "./log.mjs";
 import { notify, Color } from "./notify.mjs";
 import { api, checkDeviceMode, getCSRFToken, login, logout } from "./station.mjs";
 import { collectOnce } from "./collector.mjs";
+import { startLteMonitor } from "./lte-monitor.mjs";
+import { startDashboard } from "./dashboard.mjs";
 
 const ROUTER_IP = process.env.ROUTER_IP ?? "192.168.100.1";
 const ROUTER_USER = process.env.ROUTER_USER ?? "admin";
 const CHECK_INTERVAL_MS = parseInt(process.env.CHECK_INTERVAL_MS ?? "300000"); // 5 min
 const COLLECTOR_ENABLED = (process.env.COLLECTOR_ENABLED ?? "true") !== "false";
+const LTE_ENABLED = (process.env.LTE_ENABLED ?? "true") !== "false";
+const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT ?? "8799");
 const LOGIN_RETRIES = 3;
 const LOGIN_RETRY_DELAY_MS = 30_000; // 30s between retries
 
@@ -147,6 +151,17 @@ log("Vodafone Bridge Mode Monitor started");
 log(`Router: http://${ROUTER_IP}, User: ${ROUTER_USER}`);
 log(`Check interval: ${CHECK_INTERVAL_MS / 1000}s, Mode: ${once ? "single check" : "continuous"}`);
 log(`Signal collector: ${COLLECTOR_ENABLED ? "enabled" : "disabled"}`);
+log(`LTE failover monitor: ${LTE_ENABLED ? "enabled" : "disabled"}`);
+
+if (LTE_ENABLED && !once) {
+  try {
+    const monitor = startLteMonitor();
+    startDashboard({ port: DASHBOARD_PORT, ...monitor });
+    log(`LTE failover monitor started, dashboard on :${DASHBOARD_PORT}`);
+  } catch (err) {
+    log(`LTE monitor disabled: ${err.message}`);
+  }
+}
 
 if (!once) {
   await notify("Monitor started, watching for bridge mode changes.", Color.GREEN);
