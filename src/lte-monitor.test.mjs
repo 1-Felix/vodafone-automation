@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "lte-test-"));
+process.env.LTE_LINK_GRACE_MS = "0";
 const { startLteMonitor } = await import("./lte-monitor.mjs");
 
 function fakeFlint(script) {
@@ -44,6 +45,24 @@ test("failover session lifecycle produces alerts and usage", async () => {
   assert.equal((await m.getStatus()).session, null);
   const totals = (await m.getStatus()).totals;
   assert.equal(totals.total.bytes, 5_000_000);
+});
+
+test("dead Spitz link marks backup broken and recovers on relink", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: false, autostart: true, device: null }, counter: 0 },
+    { wan: { up: true, autostart: true }, secondwan: { up: false, autostart: true, device: null }, counter: 0 },
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+
+  await m.tick(); flint.advance(); // link down, grace starts
+  await m.tick(); flint.advance(); // still down past grace → broken
+  assert.ok(sent.some((s) => /broken/.test(s.msg)));
+  assert.equal((await m.getStatus()).backupOk, false);
+  await m.tick();                  // link back → immediate health ping clears
+  assert.equal((await m.getStatus()).backupOk, true);
 });
 
 test("toggleArmed disarms via flint and reports state", async () => {

@@ -6,7 +6,7 @@ import * as realFlint from "./flint.mjs";
 import {
   aggregateUsage, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
   fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
-  SLOW_SAMPLE_MS,
+  LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -48,6 +48,7 @@ export function startLteMonitor(deps = {}) {
   let session = null;
   let lastCounter = null;
   let lastHealthAt = 0;
+  let lteDownSince = null;
   let backupOk = undefined;
   let lastRunningUpdateAt = null;
   let lastTickTs = null;
@@ -86,16 +87,28 @@ export function startLteMonitor(deps = {}) {
       session = null;
     }
 
-    // Health ping at slow cadence, only when idle+armed (active LTE traffic proves itself)
-    if (connState === "CABLE_OK" && armed && lte.up && now - lastHealthAt >= SLOW_SAMPLE_MS) {
-      lastHealthAt = now;
-      try {
-        backupOk = await flint.healthPing();
-      } catch {
-        backupOk = false;
-      }
-    } else if (connState === "LTE_ACTIVE") {
+    // Backup health: link-down (Spitz off/unplugged) counts as broken after a
+    // grace period; otherwise ping at slow cadence (active LTE proves itself).
+    if (connState === "LTE_ACTIVE") {
       backupOk = true;
+      lteDownSince = null;
+    } else if (connState === "CABLE_OK" && armed) {
+      if (!lte.up) {
+        lteDownSince ??= now;
+        if (now - lteDownSince > LINK_GRACE_MS) backupOk = false;
+      } else {
+        lteDownSince = null;
+        if (backupOk === false || now - lastHealthAt >= SLOW_SAMPLE_MS) {
+          lastHealthAt = now;
+          try {
+            backupOk = await flint.healthPing();
+          } catch {
+            backupOk = false;
+          }
+        }
+      }
+    } else {
+      lteDownSince = null;
     }
 
     const { alerts, state } = deriveLteAlerts(alertState, { connState, armed, backupOk, closedSession }, now);

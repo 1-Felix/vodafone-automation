@@ -5,6 +5,8 @@ export const FAST_SAMPLE_MS = 60_000;
 export const SLOW_SAMPLE_MS = 600_000;
 export const RUNNING_UPDATE_MS = 30 * 60_000;
 export const BACKUP_ALERT_COOLDOWN_MS = 6 * 60 * 60_000;
+// Grace before an armed-but-linkless secondwan counts as broken (re-arm DHCP window)
+export const LINK_GRACE_MS = parseInt(process.env.LTE_LINK_GRACE_MS ?? "120000");
 
 export function deltaBytes(prev, curr) {
   if (prev === null || prev === undefined || !Number.isFinite(curr)) return 0;
