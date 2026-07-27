@@ -9,7 +9,18 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  # Pushing to main deploys to the NUC, so the suite gates the image.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22" # matches the runtime in Dockerfile
+      - run: node --test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
