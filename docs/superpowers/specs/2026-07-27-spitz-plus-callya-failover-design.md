@@ -90,8 +90,10 @@ tethering.
 - Polling backup: the existing 5-min collector cycle additionally reads
   `ubus call network.interface.wan status` / `...wan2 status` over SSH, so a lost
   POST self-heals within 5 min.
-- State machine states: `CABLE_OK`, `LTE_ACTIVE` (wan down, wan2 up),
-  `DISARMED`, `ALL_DOWN`.
+- Connectivity state machine: `CABLE_OK`, `LTE_ACTIVE` (wan down, wan2 carrying
+  traffic), `ALL_DOWN` (wan down and wan2 down or disarmed).
+- Armed/disarmed is an independent flag (derived from wan2 interface up/down),
+  shown alongside the connectivity badge; it is not a connectivity state itself.
 
 ### Metering & cost
 
@@ -102,8 +104,8 @@ tethering.
   reset; never emit negative deltas).
 - Persisted to `data/lte-usage.jsonl`; failover sessions (start, end, bytes, cost) to
   `data/lte-sessions.jsonl`.
-- Cost = bytes × €0.03 / MiB-approximation (report as estimate; Vodafone session
-  rounding adds pennies). Aggregations: current session, today, calendar month,
+- Cost = bytes / 1,000,000 × €0.03 (report as estimate; Vodafone session rounding
+  adds pennies). Aggregations: current session, today, calendar month,
   total since install.
 - Known undercount: Spitz's own housekeeping traffic (NTP/DNS) bypasses the Flint.
   Minimized by config; optionally cross-check against the Spitz UI counter.
@@ -134,6 +136,8 @@ tethering.
   (≈ 6 ct/month).
 - Purpose: proves the failover path monthly and generates chargeable activity so
   Vodafone never deactivates the idle prepaid SIM.
+- If wan2 is disarmed at drill time, the drill does not arm it; it reports
+  "drill skipped — fallback disarmed" to Discord instead.
 
 ### Config additions (.env)
 
