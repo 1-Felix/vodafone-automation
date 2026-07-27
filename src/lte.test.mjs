@@ -60,3 +60,72 @@ test("shouldSendRunningUpdate: every 30 min while LTE active", () => {
   assert.equal(shouldSendRunningUpdate("LTE_ACTIVE", 10_000_000, 10_000_000 + 60_000), false);
   assert.equal(shouldSendRunningUpdate("CABLE_OK", null, 10_000_000), false);
 });
+
+// --- deriveLteAlerts ---
+
+import { deriveLteAlerts } from "./lte.mjs";
+import { Color } from "./notify.mjs";
+
+const NOW = 1_800_000_000_000;
+
+test("alert on failover start", () => {
+  const { alerts, state } = deriveLteAlerts(
+    { connState: "CABLE_OK", armed: true, backupOk: true },
+    { connState: "LTE_ACTIVE", armed: true, backupOk: true, closedSession: null },
+    NOW,
+  );
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].message, /Failover active/);
+  assert.equal(alerts[0].color, Color.RED);
+  assert.equal(state.connState, "LTE_ACTIVE");
+});
+
+test("alert with cost summary on failover end", () => {
+  const { alerts } = deriveLteAlerts(
+    { connState: "LTE_ACTIVE", armed: true, backupOk: true },
+    {
+      connState: "CABLE_OK", armed: true, backupOk: true,
+      closedSession: {
+        startTs: new Date(NOW - 3_600_000).toISOString(),
+        endTs: new Date(NOW).toISOString(),
+        bytes: 50_000_000,
+      },
+    },
+    NOW,
+  );
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].message, /50\.0 MB/);
+  assert.match(alerts[0].message, /1\.50 €/);
+  assert.equal(alerts[0].color, Color.GREEN);
+});
+
+test("alert on disarm and re-arm", () => {
+  const a = deriveLteAlerts(
+    { connState: "CABLE_OK", armed: true, backupOk: true },
+    { connState: "CABLE_OK", armed: false, backupOk: true, closedSession: null }, NOW);
+  assert.match(a.alerts[0].message, /disarmed/);
+  const b = deriveLteAlerts(a.state,
+    { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null }, NOW);
+  assert.match(b.alerts[0].message, /armed/);
+});
+
+test("backup-broken alert once per cooldown, only while cable ok", () => {
+  const first = deriveLteAlerts(
+    { connState: "CABLE_OK", armed: true, backupOk: true },
+    { connState: "CABLE_OK", armed: true, backupOk: false, closedSession: null }, NOW);
+  assert.equal(first.alerts.length, 1);
+  assert.match(first.alerts[0].message, /broken/);
+  const second = deriveLteAlerts(first.state,
+    { connState: "CABLE_OK", armed: true, backupOk: false, closedSession: null }, NOW + 60_000);
+  assert.equal(second.alerts.length, 0);
+});
+
+test("no alerts on steady state or first run", () => {
+  const steady = deriveLteAlerts(
+    { connState: "CABLE_OK", armed: true, backupOk: true },
+    { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null }, NOW);
+  assert.equal(steady.alerts.length, 0);
+  const first = deriveLteAlerts({},
+    { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null }, NOW);
+  assert.equal(first.alerts.length, 0);
+});

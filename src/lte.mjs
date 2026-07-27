@@ -1,3 +1,5 @@
+import { Color } from "./notify.mjs";
+
 export const RATE_PER_MB = parseFloat(process.env.LTE_COST_PER_MB ?? "0.03");
 export const FAST_SAMPLE_MS = 60_000;
 export const SLOW_SAMPLE_MS = 600_000;
@@ -51,4 +53,62 @@ export function fmtMb(bytes) {
 
 export function fmtEur(eur) {
   return eur.toFixed(2) + " €";
+}
+
+const DASHBOARD_URL = process.env.DASHBOARD_URL ?? "http://192.168.0.37:8799";
+
+/**
+ * Edge-triggered failover alerting, mirroring deriveAlerts in collector.mjs.
+ * state: previous {connState?, armed?, backupOk?, lastBackupAlertAt?} ({} on first run)
+ * curr:  {connState, armed, backupOk, closedSession}
+ */
+export function deriveLteAlerts(state, curr, now) {
+  const alerts = [];
+  const next = { ...state };
+
+  if (state.connState !== undefined && state.connState !== curr.connState) {
+    if (curr.connState === "LTE_ACTIVE") {
+      alerts.push({
+        message: `**Failover active** — traffic is running over LTE at ${(RATE_PER_MB * 100).toFixed(0)} ct/MB. ${DASHBOARD_URL}`,
+        color: Color.RED,
+      });
+    } else if (state.connState === "LTE_ACTIVE" && curr.closedSession) {
+      const s = curr.closedSession;
+      const mins = Math.max(1, Math.round((Date.parse(s.endTs) - Date.parse(s.startTs)) / 60_000));
+      alerts.push({
+        message: `Failover ended after ${mins} min — ${fmtMb(s.bytes)} MB ≈ ${fmtEur(costEur(s.bytes))}.`,
+        color: Color.GREEN,
+      });
+    } else if (curr.connState === "ALL_DOWN") {
+      alerts.push({
+        message: `**ALL DOWN** — cable is down and LTE fallback is ${curr.armed ? "unavailable" : "disarmed"}.`,
+        color: Color.RED,
+      });
+    }
+  }
+
+  if (state.armed !== undefined && state.armed !== curr.armed) {
+    alerts.push(
+      curr.armed
+        ? { message: "LTE fallback **armed**.", color: Color.GREEN }
+        : { message: "LTE fallback **disarmed** — no automatic failover until re-armed.", color: Color.YELLOW },
+    );
+  }
+
+  if (
+    curr.connState === "CABLE_OK" && curr.armed &&
+    curr.backupOk === false && state.backupOk !== false &&
+    now - (state.lastBackupAlertAt ?? 0) > BACKUP_ALERT_COOLDOWN_MS
+  ) {
+    alerts.push({
+      message: "LTE backup looks **broken** (health ping via Spitz failed) — failover would not work right now.",
+      color: Color.YELLOW,
+    });
+    next.lastBackupAlertAt = now;
+  }
+
+  next.connState = curr.connState;
+  next.armed = curr.armed;
+  next.backupOk = curr.backupOk;
+  return { alerts, state: next };
 }
