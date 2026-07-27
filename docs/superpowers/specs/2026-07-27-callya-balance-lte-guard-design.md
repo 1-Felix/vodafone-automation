@@ -153,3 +153,27 @@ Key/known_hosts paths reuse the existing `FLINT_SSH_KEY` / `FLINT_KNOWN_HOSTS` m
 
 - Automated Dayflat booking via Spitz SMS API.
 - Home Assistant integration (MQTT sensors).
+
+## Revision (2026-07-27, during deploy): tracked balance instead of USSD
+
+Live testing killed the USSD approach: the Spitz's Quectel EG120K-EA is
+LTE-only (no 2G/3G fallback) and has no IMS registration (`AT+CIREG?` →
+ERROR), so Vodafone times out every `*100#` (`+CUSD: 5` after 30–60 s,
+verified on the raw AT port ttyUSB3 with URC routing set to "all"). USSD
+works from a phone (IMS/CSFB) but cannot work from this modem.
+
+Replacement, approved in-session: **tracked balance**.
+
+- The user syncs the real balance via a dashboard input (`POST /api/balance`,
+  `setBalance(eur)`), creating an anchor `{ts, eur, source:"manual"}` in
+  `data/lte-balance.jsonl` (checked via MeinVodafone or `*100#` on a phone;
+  the MeinVodafone registration SMS can be read from the Spitz UI/SSH).
+- `computeBalance(anchor, usage)` (pure, tested) = anchor minus the cost of
+  all metered bytes since the anchor, floored at 0. Because the SIM is
+  data-only in the router, all consumption flows through our own metering;
+  drift is limited to Vodafone's per-session rounding.
+- Low-balance alert below `BALANCE_LOW_EUR` unchanged (repeat max 1/24 h).
+  The "stale check" alert and daily USSD schedule were removed with the USSD
+  path; `src/spitz.mjs` was deleted.
+- The container SSH key stays authorized on the Spitz dropbear (and its host
+  key in `known_hosts`) for future SMS-based features (e.g. Dayflat booking).

@@ -24,11 +24,6 @@ function fakeFlint(script) {
   };
 }
 
-function fakeSpitz(result = { eur: 8.5, text: "Guthaben: 8,50 EUR" }) {
-  const calls = { n: 0 };
-  return { calls, queryBalance: async () => { calls.n++; return result; } };
-}
-
 test("failover session lifecycle produces alerts and usage", async () => {
   const script = [
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 1000 },
@@ -38,7 +33,7 @@ test("failover session lifecycle produces alerts and usage", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, spitz: fakeSpitz(), send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
   await m.tick(); flint.advance(); // baseline, CABLE_OK
   await m.tick(); flint.advance(); // wan down → LTE_ACTIVE
@@ -62,7 +57,7 @@ test("dead Spitz link marks backup broken and recovers on relink", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, spitz: fakeSpitz(), send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
   await m.tick(); flint.advance(); // link down, grace 0 in test → broken
   assert.ok(sent.some((s) => /broken/.test(s.msg)));
@@ -76,32 +71,42 @@ test("toggleArmed disarms via flint and reports state", async () => {
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
   ];
   const flint = fakeFlint(script);
-  const m = startLteMonitor({ flint, spitz: fakeSpitz(), send: async () => {}, autoStart: false });
+  const m = startLteMonitor({ flint, send: async () => {}, autoStart: false });
   await m.tick();
   const armed = await m.toggleArmed();
   assert.equal(armed, false);
   assert.equal(script[0].armedSet, false);
 });
 
-test("session close triggers balance check, low balance alerts", async () => {
+test("tracked balance: set anchor, decrements with usage, alerts when low", async () => {
   const script = [
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
     { wan: { up: false, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
-    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+    { wan: { up: false, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 10_000_000 },
   ];
   const flint = fakeFlint(script);
-  const spitz = fakeSpitz({ eur: 8.5, text: "Guthaben: 8,50 EUR" });
   const sent = [];
-  const m = startLteMonitor({ flint, spitz, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
   await m.tick(); flint.advance();
-  await m.tick(); flint.advance(); // failover
-  await m.tick();                  // failback → session closes → balance check
-  // >= 1, not === 1: the daily-due predicate uses the real clock and may add a check on tick 1
-  assert.ok(spitz.calls.n >= 1);
+  const set = await m.setBalance(10.2);
+  assert.equal(set.eur, 10.2);
+  await new Promise((r) => setTimeout(r, 5)); // usage ts must sort after anchor ts
+  flint.advance();                 // +10 MB during failover → 0.30 €
+  await m.tick();
   const status = await m.getStatus();
-  assert.equal(status.balance.eur, 8.5);
+  assert.equal(status.balance.eur, 9.9);
   assert.equal(status.balance.low, true);
+  assert.equal(status.balance.anchorEur, 10.2);
   assert.ok(sent.some((s) => /balance low/i.test(s.msg)));
+});
+
+test("setBalance rejects garbage", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+  ];
+  const m = startLteMonitor({ flint: fakeFlint(script), send: async () => {}, autoStart: false });
+  await assert.rejects(() => m.setBalance(NaN), /invalid balance/);
+  await assert.rejects(() => m.setBalance(-5), /invalid balance/);
 });
 
 test("guard open without timer is relocked on next tick (startup/external)", async () => {
@@ -109,7 +114,7 @@ test("guard open without timer is relocked on next tick (startup/external)", asy
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "open" },
   ];
   const flint = fakeFlint(script);
-  const m = startLteMonitor({ flint, spitz: fakeSpitz(), send: async () => {}, autoStart: false });
+  const m = startLteMonitor({ flint, send: async () => {}, autoStart: false });
   await m.tick();
   assert.equal(script[0].guard, "locked");
   assert.equal((await m.getStatus()).guard.state, "locked");
@@ -121,7 +126,7 @@ test("toggleGuard opens with expiry, second toggle relocks", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, spitz: fakeSpitz(), send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
   await m.tick();
   const g = await m.toggleGuard();
   assert.equal(g.state, "open");

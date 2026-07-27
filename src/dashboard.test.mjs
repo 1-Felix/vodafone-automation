@@ -9,6 +9,7 @@ async function serve(overrides = {}) {
     getStatus: () => ({ connState: "CABLE_OK", armed: true }),
     toggleArmed: async () => { calls.toggles++; return false; },
     toggleGuard: async () => { calls.guards = (calls.guards ?? 0) + 1; return { state: "open", openUntil: "2026-07-27T14:00:00.000Z", openMinutes: 60 }; },
+    setBalance: async (eur) => { calls.balances = [...(calls.balances ?? []), eur]; return { eur, anchorEur: eur, anchorTs: "2026-07-27T14:00:00.000Z", low: false }; },
     onWanEvent: (e) => calls.events.push(e),
     ...overrides,
   });
@@ -76,5 +77,26 @@ test("GET / includes guard and balance UI", async () => {
   const html = await (await fetch(base + "/")).text();
   assert.match(html, /api\/guard/);
   assert.match(html, /Guthaben/);
+  server.close();
+});
+
+test("POST /api/balance parses eur and calls setBalance", async () => {
+  const { server, base, calls } = await serve();
+  const res = await fetch(`${base}/api/balance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eur: 12.34 }),
+  });
+  assert.equal((await res.json()).balance.eur, 12.34);
+  assert.deepEqual(calls.balances, [12.34]);
+  server.close();
+});
+
+test("POST /api/balance with garbage returns 500", async () => {
+  const { server, base } = await serve({
+    setBalance: async (eur) => { if (!Number.isFinite(eur)) throw new Error("invalid balance"); return {}; },
+  });
+  const res = await fetch(`${base}/api/balance`, { method: "POST", body: "not json" });
+  assert.equal(res.status, 500);
   server.close();
 });

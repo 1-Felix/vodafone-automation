@@ -116,9 +116,11 @@ member `secondwan`):
   updates, arm/disarm, backup-broken (health ping every 10 min), monthly drill.
 - Monthly drill (1st, ~04:00): pulls ~2 MB through LTE to verify the path and
   keep the prepaid SIM active (≈ 6 ct/month).
-- CallYa balance on the dashboard: queried via USSD `*100#` through the Spitz
-  over SSH (free), daily and after each failover session; Discord alert below
-  €10 (`BALANCE_LOW_EUR`), stale marker when checks keep failing.
+- CallYa balance on the dashboard: tracked locally — sync the real balance once
+  (dashboard input; check via MeinVodafone or `*100#` on a phone), then the
+  collector decrements it by every metered LTE byte. Discord alert below €10
+  (`BALANCE_LOW_EUR`). (USSD from the Spitz itself is impossible: the EG120K
+  modem is LTE-only without IMS, so the network times out on `*100#`.)
 - LTE guard: only allowlisted devices (NUC, Felix-PC) may forward onto the LTE
   uplink — everything else is rejected while on failover. Allowlist lives in
   `/etc/firewall.lte_guard` on the Flint (persistent iptables include). The

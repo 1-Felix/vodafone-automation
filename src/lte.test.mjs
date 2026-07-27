@@ -130,16 +130,9 @@ test("no alerts on steady state or first run", () => {
   assert.equal(first.alerts.length, 0);
 });
 
-import { isBalanceCheckDue, BALANCE_ALERT_REPEAT_MS } from "./lte.mjs";
+import { BALANCE_ALERT_REPEAT_MS } from "./lte.mjs";
 
 const STEADY = { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null };
-
-test("isBalanceCheckDue: daily after 04:00 UTC", () => {
-  assert.equal(isBalanceCheckDue(null, "2026-07-27T05:00:00.000Z"), true);
-  assert.equal(isBalanceCheckDue("2026-07-26T05:00:00.000Z", "2026-07-27T05:00:00.000Z"), true);
-  assert.equal(isBalanceCheckDue("2026-07-27T05:00:00.000Z", "2026-07-27T09:00:00.000Z"), false);
-  assert.equal(isBalanceCheckDue(null, "2026-07-27T02:00:00.000Z"), false);
-});
 
 test("low balance alerts once, repeats after 24 h while low", () => {
   const a = deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 8.5 }, NOW);
@@ -155,14 +148,6 @@ test("low balance alerts once, repeats after 24 h while low", () => {
 test("healthy balance and null balance never alert", () => {
   assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 15 }, NOW).alerts.length, 0);
   assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: null }, NOW).alerts.length, 0);
-});
-
-test("balance stale alerts on edge only", () => {
-  const a = deriveLteAlerts({ ...STEADY, balanceStale: false }, { ...STEADY, balanceStale: true }, NOW);
-  assert.equal(a.alerts.length, 1);
-  assert.match(a.alerts[0].message, /balance check/i);
-  const b = deriveLteAlerts(a.state, { ...STEADY, balanceStale: true }, NOW + 60_000);
-  assert.equal(b.alerts.length, 0);
 });
 
 test("guard transitions alert: open YELLOW with until-time, relock GREEN, missing RED", () => {
@@ -184,4 +169,21 @@ test("guard first observation: locked silent, missing alerts", () => {
   const miss = deriveLteAlerts({ ...STEADY }, { ...STEADY, guardState: "missing" }, NOW);
   assert.equal(miss.alerts.length, 1);
   assert.equal(miss.alerts[0].color, Color.RED);
+});
+
+import { computeBalance } from "./lte.mjs";
+
+test("computeBalance: anchor minus metered usage since anchor", () => {
+  const anchor = { ts: "2026-07-27T10:00:00.000Z", eur: 20 };
+  const usage = [
+    { ts: "2026-07-27T09:00:00.000Z", bytes: 99_000_000 }, // before anchor — ignored
+    { ts: "2026-07-27T11:00:00.000Z", bytes: 5_000_000 },  // 0.15 €
+    { ts: "2026-07-27T12:00:00.000Z", bytes: 1_000_000 },  // 0.03 €
+  ];
+  assert.equal(computeBalance(anchor, usage), 19.82);
+});
+test("computeBalance: null without anchor, floors at 0", () => {
+  assert.equal(computeBalance(null, []), null);
+  assert.equal(computeBalance({ ts: "2026-07-27T10:00:00.000Z", eur: 0.05 },
+    [{ ts: "2026-07-27T11:00:00.000Z", bytes: 900_000_000 }]), 0);
 });

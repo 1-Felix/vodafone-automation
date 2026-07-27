@@ -3,11 +3,10 @@ import { join } from "node:path";
 import { log } from "./log.mjs";
 import { notify, Color } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
-import * as realSpitz from "./spitz.mjs";
 import {
-  aggregateUsage, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
-  fmtEur, fmtMb, isBalanceCheckDue, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
-  BALANCE_LOW_EUR, BALANCE_STALE_MS, LINK_GRACE_MS, SLOW_SAMPLE_MS,
+  aggregateUsage, computeBalance, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
+  fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
+  BALANCE_LOW_EUR, LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -35,7 +34,6 @@ function loadJsonl(file) {
 
 export function startLteMonitor(deps = {}) {
   const flint = deps.flint ?? realFlint;
-  const spitz = deps.spitz ?? realSpitz;
   const send = deps.send ?? notify;
   const autoStart = deps.autoStart ?? true;
 
@@ -49,8 +47,8 @@ export function startLteMonitor(deps = {}) {
     // fresh state
   }
 
-  const balanceHistory = loadJsonl(BALANCE_FILE);
-  let balance = balanceHistory.at(-1) ?? null; // {ts, eur, text}
+  const anchors = loadJsonl(BALANCE_FILE);
+  let anchor = anchors.at(-1) ?? null; // {ts, eur, source} — last manual balance sync
   let guardState = null;
   let guardOpenUntil = null; // epoch ms | null (null while open = not ours → relock)
   let lastGuardStuckAlertAt = 0;
@@ -143,29 +141,9 @@ export function startLteMonitor(deps = {}) {
     }
     if (guardState !== "open") guardOpenUntil = null;
 
-    // Balance: daily + after each failover session; attempt ts persisted so
-    // failures retry next day, not every tick
-    if (closedSession || isBalanceCheckDue(persisted.lastBalanceCheckTs, ts)) {
-      persisted.lastBalanceCheckTs = ts;
-      writeFileSync(STATE_FILE, JSON.stringify(persisted));
-      try {
-        const b = await spitz.queryBalance();
-        if (b) {
-          balance = { ts, eur: b.eur, text: b.text };
-          appendFileSync(BALANCE_FILE, JSON.stringify(balance) + "\n");
-        } else {
-          log("Balance check: unparseable USSD response");
-        }
-      } catch (err) {
-        log(`Balance check failed: ${err.message}`);
-      }
-    }
-    const balanceStale = balance !== null && now - Date.parse(balance.ts) > BALANCE_STALE_MS;
-
     const { alerts, state } = deriveLteAlerts(alertState, {
       connState, armed, backupOk, closedSession,
-      balanceEur: balance?.eur ?? null,
-      balanceStale,
+      balanceEur: computeBalance(anchor, usage),
       guardState,
       guardOpenUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
     }, now);
@@ -226,10 +204,11 @@ export function startLteMonitor(deps = {}) {
       session: session ? { ...session, costEur: costEur(session.bytes) } : null,
       totals: aggregateUsage(usage, new Date().toISOString()),
       history: sessions.slice(-20).reverse(),
-      balance: balance ? {
-        ...balance,
-        low: typeof balance.eur === "number" && balance.eur < BALANCE_LOW_EUR,
-        stale: Date.now() - Date.parse(balance.ts) > BALANCE_STALE_MS,
+      balance: anchor ? {
+        eur: computeBalance(anchor, usage),
+        anchorEur: anchor.eur,
+        anchorTs: anchor.ts,
+        low: computeBalance(anchor, usage) < BALANCE_LOW_EUR,
       } : null,
       guard: {
         state: guardState,
@@ -245,6 +224,14 @@ export function startLteMonitor(deps = {}) {
     await flint.setLteArmed(!lte.autostart);
     await tick();
     return !lte.autostart;
+  }
+
+  async function setBalance(eur) {
+    if (!Number.isFinite(eur) || eur < 0 || eur > 1000) throw new Error(`invalid balance: ${eur}`);
+    anchor = { ts: new Date().toISOString(), eur, source: "manual" };
+    appendFileSync(BALANCE_FILE, JSON.stringify(anchor) + "\n");
+    await tick();
+    return (await getStatus()).balance;
   }
 
   async function toggleGuard() {
@@ -274,5 +261,5 @@ export function startLteMonitor(deps = {}) {
     });
   }
 
-  return { getStatus, toggleArmed, toggleGuard, onWanEvent, tick };
+  return { getStatus, toggleArmed, toggleGuard, setBalance, onWanEvent, tick };
 }

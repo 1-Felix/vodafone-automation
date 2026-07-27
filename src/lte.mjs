@@ -47,12 +47,16 @@ export function isDrillDue(lastDrillTs, nowIso) {
 
 export const BALANCE_LOW_EUR = parseFloat(process.env.BALANCE_LOW_EUR ?? "10");
 export const BALANCE_ALERT_REPEAT_MS = 24 * 60 * 60_000;
-export const BALANCE_STALE_MS = 72 * 60 * 60_000;
 
-// Due once per UTC day, first tick after 04:00 UTC (05/06:00 Berlin)
-export function isBalanceCheckDue(lastCheckTs, nowIso) {
-  if (parseInt(nowIso.slice(11, 13), 10) < 4) return false;
-  return (lastCheckTs ?? "").slice(0, 10) < nowIso.slice(0, 10);
+// Tracked balance: last manual anchor minus metered usage since then.
+// (USSD on the Spitz is impossible — EG120K is LTE-only without IMS, the
+// network times out every *100# — so the SIM's data-only spend is computed
+// from our own byte metering instead and re-synced manually after top-ups.)
+export function computeBalance(anchor, usageEntries) {
+  if (!anchor) return null;
+  let bytes = 0;
+  for (const e of usageEntries) if (e.ts > anchor.ts) bytes += e.bytes;
+  return Math.max(0, Math.round((anchor.eur - costEur(bytes)) * 100) / 100);
 }
 
 export function shouldSendRunningUpdate(connState, lastUpdateAt, now) {
@@ -129,14 +133,6 @@ export function deriveLteAlerts(state, curr, now) {
     });
     next.lastBalanceAlertAt = now;
   }
-
-  if (curr.balanceStale === true && state.balanceStale !== true) {
-    alerts.push({
-      message: "CallYa balance check has been **failing for 3+ days** — balance shown is stale.",
-      color: Color.YELLOW,
-    });
-  }
-  if (curr.balanceStale !== undefined) next.balanceStale = curr.balanceStale;
 
   if (curr.guardState && curr.guardState !== state.guardState &&
       (state.guardState !== undefined || curr.guardState === "missing")) {

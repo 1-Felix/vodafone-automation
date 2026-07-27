@@ -24,7 +24,7 @@ td,th{padding:.35rem .5rem;border-bottom:1px solid #262b36;text-align:left;font-
 <div class="row num">Today <b id="day">–</b> · Month <b id="month">–</b> · Total <b id="total">–</b></div>
 <div class="row"><button id="btn" onclick="toggle()">…</button></div>
 <div class="row"><span id="guard" class="pill">…</span> <button id="gbtn" onclick="guardToggle()">…</button></div>
-<div class="row" id="balance">CallYa Guthaben: –</div>
+<div class="row"><span id="balance">CallYa Guthaben: –</span> <input id="balin" size="7" inputmode="decimal" placeholder="12.34"> <button onclick="setBal()">Sync balance</button></div>
 <table><thead><tr><th>Start</th><th>Duration</th><th>MB</th><th>Cost</th></tr></thead><tbody id="hist"></tbody></table>
 <p class="muted" id="updated"></p>
 <script>
@@ -48,8 +48,8 @@ async function refresh(){
   gb.textContent = g.state==="open" ? "Relock now" : g.state==="missing" ? "Rebuild guard" : "Open for all ("+(g.openMinutes??60)+" min)";
   const bal=s.balance;
   document.getElementById("balance").innerHTML = "CallYa Guthaben: "+(bal
-    ? "<b"+(bal.low?' class="warn pill"':"")+">"+(bal.eur!=null?eur(bal.eur):"?")+"</b> <span class=\\"muted\\">(checked "+bal.ts.slice(0,16).replace("T"," ")+(bal.stale?", STALE":"")+")</span>"
-    : "–");
+    ? "<b"+(bal.low?' class="warn pill"':"")+">"+eur(bal.eur)+"</b> <span class=\\"muted\\">(synced "+eur(bal.anchorEur)+" at "+bal.anchorTs.slice(0,16).replace("T"," ")+")</span>"
+    : "– <span class=\\"muted\\">(sync once via *100# on a phone / MeinVodafone)</span>");
   document.getElementById("hist").innerHTML=(s.history??[]).map(h=>{
     const min=Math.max(1,Math.round((Date.parse(h.endTs)-Date.parse(h.startTs))/60000));
     return "<tr><td>"+h.startTs.slice(0,16).replace("T"," ")+"</td><td>"+min+" min</td><td>"+mb(h.bytes)+"</td><td>"+eur(h.costEur??0)+"</td></tr>";
@@ -65,6 +65,13 @@ async function guardToggle(){
   const b=document.getElementById("gbtn");
   b.disabled=true;
   try{await fetch("api/guard",{method:"POST"});}finally{b.disabled=false;}
+  refresh();
+}
+async function setBal(){
+  const v=parseFloat(document.getElementById("balin").value.replace(",", "."));
+  if(!isFinite(v))return;
+  await fetch("api/balance",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({eur:v})});
+  document.getElementById("balin").value="";
   refresh();
 }
 setInterval(refresh,10000);refresh();
@@ -83,7 +90,7 @@ function json(res, obj, code = 200) {
   res.end(JSON.stringify(obj));
 }
 
-export function startDashboard({ port, getStatus, toggleArmed, toggleGuard, onWanEvent }) {
+export function startDashboard({ port, getStatus, toggleArmed, toggleGuard, setBalance, onWanEvent }) {
   const server = createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/") {
@@ -95,6 +102,10 @@ export function startDashboard({ port, getStatus, toggleArmed, toggleGuard, onWa
         json(res, { armed: await toggleArmed() });
       } else if (req.method === "POST" && req.url === "/api/guard") {
         json(res, { guard: await toggleGuard() });
+      } else if (req.method === "POST" && req.url === "/api/balance") {
+        let body = {};
+        try { body = JSON.parse((await readBody(req)) || "{}"); } catch { /* handled below */ }
+        json(res, { balance: await setBalance(parseFloat(body.eur)) });
       } else if (req.method === "POST" && req.url === "/event") {
         let evt = {};
         try {
