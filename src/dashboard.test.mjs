@@ -8,6 +8,7 @@ async function serve(overrides = {}) {
     port: 0,
     getStatus: () => ({ connState: "CABLE_OK", armed: true }),
     toggleArmed: async () => { calls.toggles++; return false; },
+    toggleGuard: async () => { calls.guards = (calls.guards ?? 0) + 1; return { state: "open", openUntil: "2026-07-27T14:00:00.000Z", openMinutes: 60 }; },
     onWanEvent: (e) => calls.events.push(e),
     ...overrides,
   });
@@ -59,5 +60,21 @@ test("unknown route returns 404, handler errors return 500", async () => {
   const res = await fetch(`${base}/api/status`);
   assert.equal(res.status, 500);
   assert.deepEqual(await res.json(), { error: "boom" });
+  server.close();
+});
+
+test("POST /api/guard calls toggleGuard and returns guard", async () => {
+  const { server, base, calls } = await serve();
+  const res = await fetch(`${base}/api/guard`, { method: "POST" });
+  assert.deepEqual(await res.json(), { guard: { state: "open", openUntil: "2026-07-27T14:00:00.000Z", openMinutes: 60 } });
+  assert.equal(calls.guards, 1);
+  server.close();
+});
+
+test("GET / includes guard and balance UI", async () => {
+  const { server, base } = await serve();
+  const html = await (await fetch(base + "/")).text();
+  assert.match(html, /api\/guard/);
+  assert.match(html, /Guthaben/);
   server.close();
 });

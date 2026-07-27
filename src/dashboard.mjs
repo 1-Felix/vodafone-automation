@@ -11,6 +11,7 @@ h1{font-size:1.3rem} .row{margin:.8rem 0}
 .badge{display:inline-block;padding:.25rem .8rem;border-radius:.5rem;font-weight:700}
 .CABLE_OK{background:#14532d}.LTE_ACTIVE{background:#7f1d1d}.ALL_DOWN{background:#450a0a;outline:2px solid #ef4444}
 .pill{padding:.15rem .6rem;border-radius:1rem;font-size:.8rem;background:#1f2937}
+.warn{background:#78350f}
 button{font:inherit;padding:.5rem 1.4rem;border-radius:.5rem;border:0;cursor:pointer;background:#2563eb;color:#fff}
 button.off{background:#4b5563}
 table{width:100%;border-collapse:collapse;margin-top:1rem}
@@ -22,6 +23,8 @@ td,th{padding:.35rem .5rem;border-bottom:1px solid #262b36;text-align:left;font-
 <div class="row" id="session"></div>
 <div class="row num">Today <b id="day">–</b> · Month <b id="month">–</b> · Total <b id="total">–</b></div>
 <div class="row"><button id="btn" onclick="toggle()">…</button></div>
+<div class="row"><span id="guard" class="pill">…</span> <button id="gbtn" onclick="guardToggle()">…</button></div>
+<div class="row" id="balance">CallYa Guthaben: –</div>
 <table><thead><tr><th>Start</th><th>Duration</th><th>MB</th><th>Cost</th></tr></thead><tbody id="hist"></tbody></table>
 <p class="muted" id="updated"></p>
 <script>
@@ -36,6 +39,17 @@ async function refresh(){
   if(s.totals)for(const k of["day","month","total"])document.getElementById(k).textContent=mb(s.totals[k].bytes)+" MB / "+eur(s.totals[k].costEur);
   const b=document.getElementById("btn");
   b.textContent=s.armed?"Disarm fallback":"Arm fallback"; b.className=s.armed?"":"off";
+  const g=s.guard??{};
+  const gp=document.getElementById("guard");
+  gp.textContent = g.state==="open" ? "guard OPEN"+(g.openUntil?" until "+g.openUntil.slice(11,16)+" UTC":"")
+    : g.state==="missing" ? "⚠ guard missing" : "guard locked";
+  gp.className = "pill"+(g.state==="locked"?"":" warn");
+  const gb=document.getElementById("gbtn");
+  gb.textContent = g.state==="open" ? "Relock now" : g.state==="missing" ? "Rebuild guard" : "Open for all ("+(g.openMinutes??60)+" min)";
+  const bal=s.balance;
+  document.getElementById("balance").innerHTML = "CallYa Guthaben: "+(bal
+    ? "<b"+(bal.low?' class="warn pill"':"")+">"+(bal.eur!=null?eur(bal.eur):"?")+"</b> <span class=\\"muted\\">(checked "+bal.ts.slice(0,16).replace("T"," ")+(bal.stale?", STALE":"")+")</span>"
+    : "–");
   document.getElementById("hist").innerHTML=(s.history??[]).map(h=>{
     const min=Math.max(1,Math.round((Date.parse(h.endTs)-Date.parse(h.startTs))/60000));
     return "<tr><td>"+h.startTs.slice(0,16).replace("T"," ")+"</td><td>"+min+" min</td><td>"+mb(h.bytes)+"</td><td>"+eur(h.costEur??0)+"</td></tr>";
@@ -45,6 +59,12 @@ async function refresh(){
 async function toggle(){
   document.getElementById("btn").disabled=true;
   try{await fetch("api/toggle",{method:"POST"});}finally{document.getElementById("btn").disabled=false;}
+  refresh();
+}
+async function guardToggle(){
+  const b=document.getElementById("gbtn");
+  b.disabled=true;
+  try{await fetch("api/guard",{method:"POST"});}finally{b.disabled=false;}
   refresh();
 }
 setInterval(refresh,10000);refresh();
@@ -63,7 +83,7 @@ function json(res, obj, code = 200) {
   res.end(JSON.stringify(obj));
 }
 
-export function startDashboard({ port, getStatus, toggleArmed, onWanEvent }) {
+export function startDashboard({ port, getStatus, toggleArmed, toggleGuard, onWanEvent }) {
   const server = createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/") {
@@ -73,6 +93,8 @@ export function startDashboard({ port, getStatus, toggleArmed, onWanEvent }) {
         json(res, await getStatus());
       } else if (req.method === "POST" && req.url === "/api/toggle") {
         json(res, { armed: await toggleArmed() });
+      } else if (req.method === "POST" && req.url === "/api/guard") {
+        json(res, { guard: await toggleGuard() });
       } else if (req.method === "POST" && req.url === "/event") {
         let evt = {};
         try {
