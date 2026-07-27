@@ -101,6 +101,25 @@ node src/index.mjs        # continuous monitoring
 node src/index.mjs --once  # single check
 ```
 
+## LTE failover monitor
+
+Alongside the Station monitor, the container watches the home LAN's LTE failover
+path (GL.iNet Spitz Plus with a CallYa prepaid SIM, wired to the Flint as kmwan
+member `secondwan`):
+
+- Meters billable LTE bytes from the Flint's `lan5` counters over SSH and prices
+  them at 3 ct/MB (`data/lte-usage.jsonl`, `data/lte-sessions.jsonl`).
+- Dashboard on the NUC LAN (`:8799`): connectivity badge, session/day/month/total
+  cost, failover history, and an arm/disarm kill switch (armed by default;
+  disarm = `ifdown secondwan` on the Flint, resets to armed on reboot).
+- Discord alerts: failover started/ended with cost summary, 30-min running
+  updates, arm/disarm, backup-broken (health ping every 10 min), monthly drill.
+- Monthly drill (1st, ~04:00): pulls ~2 MB through LTE to verify the path and
+  keep the prepaid SIM active (≈ 6 ct/month).
+
+Design and runbook: `docs/superpowers/specs/2026-07-27-spitz-plus-callya-failover-design.md`
+and `docs/superpowers/plans/2026-07-27-spitz-callya-lte-failover.md`.
+
 ## Tested on
 
 - **Router:** Vodafone Station (Arris CGA6444VF)

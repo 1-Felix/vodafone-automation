@@ -9,3 +9,5 @@ services:
     volumes:
       # Persists DOCSIS signal levels and the station event log (JSONL)
       - ./data:/app/data
+      # SSH key for Flint access (LTE failover metering + kill switch)
+      - ./ssh:/app/ssh:ro
