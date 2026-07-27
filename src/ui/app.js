@@ -85,7 +85,11 @@ function renderGauge(bal) {
   // The scale has to reach the reserve line too, or a high threshold would sit
   // off the top of the column.
   const top = Math.max(bal.anchorEur, bal.eur, bal.lowEur ?? 0, 10);
-  const ceiling = Math.ceil(top / 5) * 5;
+  // Headroom when the highest reference lands exactly on a step, or it would
+  // sit on the rim — which is precisely the low-balance case, where the reserve
+  // line has to stay readable as a line rather than a border.
+  let ceiling = Math.ceil(top / 5) * 5;
+  if (ceiling === top) ceiling += 5;
   const step = ceiling > 30 ? 10 : 5;
   const pct = (v) => Math.max(0, Math.min(100, (v / ceiling) * 100));
   const spent = Math.max(0, bal.anchorEur - bal.eur);
