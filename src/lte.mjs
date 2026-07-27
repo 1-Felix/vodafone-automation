@@ -45,6 +45,16 @@ export function isDrillDue(lastDrillTs, nowIso) {
   return (lastDrillTs ?? "").slice(0, 7) < nowIso.slice(0, 7);
 }
 
+export const BALANCE_LOW_EUR = parseFloat(process.env.BALANCE_LOW_EUR ?? "10");
+export const BALANCE_ALERT_REPEAT_MS = 24 * 60 * 60_000;
+export const BALANCE_STALE_MS = 72 * 60 * 60_000;
+
+// Due once per UTC day, first tick after 04:00 UTC (05/06:00 Berlin)
+export function isBalanceCheckDue(lastCheckTs, nowIso) {
+  if (parseInt(nowIso.slice(11, 13), 10) < 4) return false;
+  return (lastCheckTs ?? "").slice(0, 10) < nowIso.slice(0, 10);
+}
+
 export function shouldSendRunningUpdate(connState, lastUpdateAt, now) {
   return connState === "LTE_ACTIVE" && now - (lastUpdateAt ?? 0) >= RUNNING_UPDATE_MS;
 }
@@ -108,6 +118,46 @@ export function deriveLteAlerts(state, curr, now) {
     });
     next.lastBackupAlertAt = now;
   }
+
+  if (
+    typeof curr.balanceEur === "number" && curr.balanceEur < BALANCE_LOW_EUR &&
+    now - (state.lastBalanceAlertAt ?? 0) >= BALANCE_ALERT_REPEAT_MS
+  ) {
+    alerts.push({
+      message: `CallYa balance low: **${fmtEur(curr.balanceEur)}** — top up soon, the LTE fallback dies with the credit.`,
+      color: Color.YELLOW,
+    });
+    next.lastBalanceAlertAt = now;
+  }
+
+  if (curr.balanceStale === true && state.balanceStale !== true) {
+    alerts.push({
+      message: "CallYa balance check has been **failing for 3+ days** — balance shown is stale.",
+      color: Color.YELLOW,
+    });
+  }
+  if (curr.balanceStale !== undefined) next.balanceStale = curr.balanceStale;
+
+  if (curr.guardState && curr.guardState !== state.guardState &&
+      (state.guardState !== undefined || curr.guardState === "missing")) {
+    if (curr.guardState === "open") {
+      alerts.push({
+        message: `LTE guard **opened** — ALL devices may use LTE${curr.guardOpenUntil ? ` until ${curr.guardOpenUntil.slice(11, 16)} UTC` : ""}.`,
+        color: Color.YELLOW,
+      });
+    } else if (curr.guardState === "locked") {
+      alerts.push({
+        message: "LTE guard **locked** — only allowlisted devices (NUC, Felix-PC) may use LTE.",
+        color: Color.GREEN,
+      });
+    } else if (curr.guardState === "missing") {
+      alerts.push({
+        message: "LTE guard chain **missing** on the Flint — LTE is unrestricted for all devices. Reinstall /etc/firewall.lte_guard.",
+        color: Color.RED,
+      });
+    }
+  }
+  if (curr.guardState) next.guardState = curr.guardState;
 
   next.connState = curr.connState;
   next.armed = curr.armed;

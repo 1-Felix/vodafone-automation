@@ -129,3 +129,59 @@ test("no alerts on steady state or first run", () => {
     { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null }, NOW);
   assert.equal(first.alerts.length, 0);
 });
+
+import { isBalanceCheckDue, BALANCE_ALERT_REPEAT_MS } from "./lte.mjs";
+
+const STEADY = { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null };
+
+test("isBalanceCheckDue: daily after 04:00 UTC", () => {
+  assert.equal(isBalanceCheckDue(null, "2026-07-27T05:00:00.000Z"), true);
+  assert.equal(isBalanceCheckDue("2026-07-26T05:00:00.000Z", "2026-07-27T05:00:00.000Z"), true);
+  assert.equal(isBalanceCheckDue("2026-07-27T05:00:00.000Z", "2026-07-27T09:00:00.000Z"), false);
+  assert.equal(isBalanceCheckDue(null, "2026-07-27T02:00:00.000Z"), false);
+});
+
+test("low balance alerts once, repeats after 24 h while low", () => {
+  const a = deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 8.5 }, NOW);
+  assert.equal(a.alerts.length, 1);
+  assert.match(a.alerts[0].message, /8\.50 €/);
+  assert.equal(a.alerts[0].color, Color.YELLOW);
+  const b = deriveLteAlerts(a.state, { ...STEADY, balanceEur: 8.4 }, NOW + 60_000);
+  assert.equal(b.alerts.length, 0);
+  const c = deriveLteAlerts(b.state, { ...STEADY, balanceEur: 8.4 }, NOW + BALANCE_ALERT_REPEAT_MS + 1);
+  assert.equal(c.alerts.length, 1);
+});
+
+test("healthy balance and null balance never alert", () => {
+  assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 15 }, NOW).alerts.length, 0);
+  assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: null }, NOW).alerts.length, 0);
+});
+
+test("balance stale alerts on edge only", () => {
+  const a = deriveLteAlerts({ ...STEADY, balanceStale: false }, { ...STEADY, balanceStale: true }, NOW);
+  assert.equal(a.alerts.length, 1);
+  assert.match(a.alerts[0].message, /balance check/i);
+  const b = deriveLteAlerts(a.state, { ...STEADY, balanceStale: true }, NOW + 60_000);
+  assert.equal(b.alerts.length, 0);
+});
+
+test("guard transitions alert: open YELLOW with until-time, relock GREEN, missing RED", () => {
+  const open = deriveLteAlerts({ ...STEADY, guardState: "locked" },
+    { ...STEADY, guardState: "open", guardOpenUntil: "2026-07-27T13:45:00.000Z" }, NOW);
+  assert.equal(open.alerts.length, 1);
+  assert.equal(open.alerts[0].color, Color.YELLOW);
+  assert.match(open.alerts[0].message, /13:45/);
+  const lock = deriveLteAlerts(open.state, { ...STEADY, guardState: "locked" }, NOW);
+  assert.equal(lock.alerts.length, 1);
+  assert.equal(lock.alerts[0].color, Color.GREEN);
+  const miss = deriveLteAlerts(lock.state, { ...STEADY, guardState: "missing" }, NOW);
+  assert.equal(miss.alerts.length, 1);
+  assert.equal(miss.alerts[0].color, Color.RED);
+});
+
+test("guard first observation: locked silent, missing alerts", () => {
+  assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, guardState: "locked" }, NOW).alerts.length, 0);
+  const miss = deriveLteAlerts({ ...STEADY }, { ...STEADY, guardState: "missing" }, NOW);
+  assert.equal(miss.alerts.length, 1);
+  assert.equal(miss.alerts[0].color, Color.RED);
+});
