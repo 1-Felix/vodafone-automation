@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { log } from "./log.mjs";
 import { notify, Color } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
+import * as realSpitz from "./spitz.mjs";
 import {
   aggregateUsage, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
-  fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
-  LINK_GRACE_MS, SLOW_SAMPLE_MS,
+  fmtEur, fmtMb, isBalanceCheckDue, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
+  BALANCE_LOW_EUR, BALANCE_STALE_MS, LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -14,6 +15,9 @@ const LTE_IFACE = process.env.LTE_IFACE ?? "secondwan";
 const USAGE_FILE = join(DATA_DIR, "lte-usage.jsonl");
 const SESSIONS_FILE = join(DATA_DIR, "lte-sessions.jsonl");
 const STATE_FILE = join(DATA_DIR, "lte-state.json");
+const BALANCE_FILE = join(DATA_DIR, "lte-balance.jsonl");
+const GUARD_OPEN_MS = parseInt(process.env.GUARD_OPEN_MINUTES ?? "60") * 60_000;
+const GUARD_STUCK_ALERT_MS = 30 * 60_000;
 
 function loadJsonl(file) {
   try {
@@ -31,6 +35,7 @@ function loadJsonl(file) {
 
 export function startLteMonitor(deps = {}) {
   const flint = deps.flint ?? realFlint;
+  const spitz = deps.spitz ?? realSpitz;
   const send = deps.send ?? notify;
   const autoStart = deps.autoStart ?? true;
 
@@ -44,6 +49,11 @@ export function startLteMonitor(deps = {}) {
     // fresh state
   }
 
+  const balanceHistory = loadJsonl(BALANCE_FILE);
+  let balance = balanceHistory.at(-1) ?? null; // {ts, eur, text}
+  let guardState = null;
+  let guardOpenUntil = null; // epoch ms | null (null while open = not ours → relock)
+  let lastGuardStuckAlertAt = 0;
   let alertState = {};
   let session = null;
   let lastCounter = null;
@@ -111,7 +121,54 @@ export function startLteMonitor(deps = {}) {
       lteDownSince = null;
     }
 
-    const { alerts, state } = deriveLteAlerts(alertState, { connState, armed, backupOk, closedSession }, now);
+    // LTE guard: read state; relock when the window expired or nobody owns the open
+    const firstGuardRead = alertState.guardState === undefined;
+    guardState = await flint.getGuardState();
+    if (guardState === "open" && (guardOpenUntil === null || now >= guardOpenUntil)) {
+      try {
+        await flint.relockGuard();
+        guardState = await flint.getGuardState();
+        if (guardOpenUntil === null && !firstGuardRead) {
+          await send("LTE guard was opened outside the dashboard — **re-locked** it.", Color.YELLOW);
+        } else if (guardOpenUntil === null) {
+          await send("LTE guard **re-locked on startup** (was open).", Color.GREEN);
+        }
+        guardOpenUntil = null;
+      } catch (err) {
+        if (now - lastGuardStuckAlertAt >= GUARD_STUCK_ALERT_MS) {
+          lastGuardStuckAlertAt = now;
+          await send(`LTE guard relock **FAILED** (${err.message}) — guard is stuck OPEN, retrying every tick.`, Color.RED);
+        }
+      }
+    }
+    if (guardState !== "open") guardOpenUntil = null;
+
+    // Balance: daily + after each failover session; attempt ts persisted so
+    // failures retry next day, not every tick
+    if (closedSession || isBalanceCheckDue(persisted.lastBalanceCheckTs, ts)) {
+      persisted.lastBalanceCheckTs = ts;
+      writeFileSync(STATE_FILE, JSON.stringify(persisted));
+      try {
+        const b = await spitz.queryBalance();
+        if (b) {
+          balance = { ts, eur: b.eur, text: b.text };
+          appendFileSync(BALANCE_FILE, JSON.stringify(balance) + "\n");
+        } else {
+          log("Balance check: unparseable USSD response");
+        }
+      } catch (err) {
+        log(`Balance check failed: ${err.message}`);
+      }
+    }
+    const balanceStale = balance !== null && now - Date.parse(balance.ts) > BALANCE_STALE_MS;
+
+    const { alerts, state } = deriveLteAlerts(alertState, {
+      connState, armed, backupOk, closedSession,
+      balanceEur: balance?.eur ?? null,
+      balanceStale,
+      guardState,
+      guardOpenUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
+    }, now);
     alertState = state;
     for (const a of alerts) await send(a.message, a.color);
 
@@ -169,6 +226,16 @@ export function startLteMonitor(deps = {}) {
       session: session ? { ...session, costEur: costEur(session.bytes) } : null,
       totals: aggregateUsage(usage, new Date().toISOString()),
       history: sessions.slice(-20).reverse(),
+      balance: balance ? {
+        ...balance,
+        low: typeof balance.eur === "number" && balance.eur < BALANCE_LOW_EUR,
+        stale: Date.now() - Date.parse(balance.ts) > BALANCE_STALE_MS,
+      } : null,
+      guard: {
+        state: guardState,
+        openUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
+        openMinutes: GUARD_OPEN_MS / 60_000,
+      },
       updatedAt: lastTickTs,
     };
   }
@@ -178,6 +245,21 @@ export function startLteMonitor(deps = {}) {
     await flint.setLteArmed(!lte.autostart);
     await tick();
     return !lte.autostart;
+  }
+
+  async function toggleGuard() {
+    const s = await flint.getGuardState();
+    if (s === "open") {
+      guardOpenUntil = null;
+      await flint.relockGuard();
+    } else if (s === "locked") {
+      guardOpenUntil = Date.now() + GUARD_OPEN_MS;
+      await flint.openGuard();
+    } else {
+      await flint.relockGuard(); // "missing": try to rebuild from the include script
+    }
+    await tick();
+    return (await getStatus()).guard;
   }
 
   function onWanEvent(evt) {
@@ -192,5 +274,5 @@ export function startLteMonitor(deps = {}) {
     });
   }
 
-  return { getStatus, toggleArmed, onWanEvent, tick };
+  return { getStatus, toggleArmed, toggleGuard, onWanEvent, tick };
 }
