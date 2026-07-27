@@ -34,6 +34,7 @@ test("failover session lifecycle produces alerts and usage", async () => {
   await m.tick(); flint.advance(); // baseline, CABLE_OK
   await m.tick(); flint.advance(); // wan down → LTE_ACTIVE
   assert.ok(sent.some((s) => /Failover active/.test(s.msg)));
+  assert.ok(!sent.some((s) => /still active/.test(s.msg)), "no running update at session start");
   await m.tick(); flint.advance(); // +5 MB while active
   const status = await m.getStatus();
   assert.equal(status.session.bytes, 5_000_000);

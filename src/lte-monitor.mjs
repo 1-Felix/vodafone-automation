@@ -77,6 +77,7 @@ export function startLteMonitor(deps = {}) {
     let closedSession = null;
     if (connState === "LTE_ACTIVE" && !session) {
       session = { startTs: ts, bytes: 0 };
+      lastRunningUpdateAt = now; // first running update 30 min in, not at start
     } else if (connState !== "LTE_ACTIVE" && session) {
       closedSession = { ...session, endTs: ts };
       const rec = { ...closedSession, costEur: costEur(closedSession.bytes) };
