@@ -63,3 +63,28 @@ export async function runDrill() {
   const [bytes, seconds] = out.trim().split(/\s+/).map(Number);
   return { ok: bytes > 1_000_000, bytes: bytes || 0, seconds: seconds || 0 };
 }
+
+const GUARD_SCRIPT = process.env.GUARD_SCRIPT ?? "/etc/firewall.lte_guard";
+
+export function parseGuardState(out) {
+  if (!out || !out.includes("-N lte_guard")) return "missing";
+  if (!out.includes("HOOKED")) return "missing";
+  if (/-A lte_guard -j ACCEPT\b/.test(out)) return "open";
+  if (/-A lte_guard .*-j REJECT/.test(out)) return "locked";
+  return "missing"; // chain exists but is empty/partial — not guarding
+}
+
+export async function getGuardState() {
+  const out = await flintSsh(
+    "iptables -S lte_guard 2>/dev/null; iptables -S forwarding_rule 2>/dev/null | grep -q lte_guard && echo HOOKED",
+  );
+  return parseGuardState(out);
+}
+
+export async function openGuard() {
+  await flintSsh("iptables -I lte_guard 1 -j ACCEPT");
+}
+
+export async function relockGuard() {
+  await flintSsh(`sh ${GUARD_SCRIPT}`);
+}

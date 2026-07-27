@@ -20,3 +20,26 @@ test("parseCountersTotal returns null on garbage", () => {
   assert.equal(parseCountersTotal("cat: no such file\n"), null);
   assert.equal(parseCountersTotal("ERR\n"), null);
 });
+
+import { parseGuardState } from "./flint.mjs";
+
+const LOCKED = `-N lte_guard
+-A lte_guard -s 192.168.0.37/32 -j RETURN
+-A lte_guard -s 192.168.0.59/32 -j RETURN
+-A lte_guard -j REJECT --reject-with icmp-admin-prohibited
+HOOKED
+`;
+
+test("parseGuardState: locked chain", () => {
+  assert.equal(parseGuardState(LOCKED), "locked");
+});
+
+test("parseGuardState: open when ACCEPT-all present", () => {
+  assert.equal(parseGuardState(LOCKED.replace("-A lte_guard -s", "-A lte_guard -j ACCEPT\n-A lte_guard -s")), "open");
+});
+
+test("parseGuardState: missing when chain absent or not hooked", () => {
+  assert.equal(parseGuardState(""), "missing");
+  assert.equal(parseGuardState("iptables: No chain by that name.\n"), "missing");
+  assert.equal(parseGuardState(LOCKED.replace("HOOKED\n", "")), "missing");
+});
