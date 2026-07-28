@@ -707,7 +707,7 @@ git commit -m "Tier the LTE failover alerts"
 
 `src/index.mjs` has no test file — its five changes are verified by the suite still passing plus reading the diff. Do not create one; adding coverage for the bridge-restore flow means faking the Station HTTP API and is well outside this change.
 
-The `deps.nowIso` injection is a small addition beyond the spec's letter. It exists because the drill is gated behind `isDrillDue`, which only fires before 03:00 UTC (`src/lte.mjs:43-46`), so the drill tiers the spec asks us to test are otherwise unreachable from a test at most times of day. It follows the module's established injection pattern (`flint`, `send`, `autoStart` are already deps).
+The `deps.nowIso` injection is a small addition beyond the spec's letter. It exists because the drill is gated behind `isDrillDue`, which returns false before 03:00 UTC and only fires once per calendar month (`src/lte.mjs:43-46`), so the drill tiers the spec asks us to test are otherwise unreachable from a test. It follows the module's established injection pattern (`flint`, `send`, `autoStart` are already deps).
 
 - [ ] **Step 1: Write the failing test**
 

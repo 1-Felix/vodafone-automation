@@ -1,5 +1,5 @@
 import { log } from "./log.mjs";
-import { notify, Color } from "./notify.mjs";
+import { notify, Color, Tier } from "./notify.mjs";
 import { api, checkDeviceMode, getCSRFToken, login, logout } from "./station.mjs";
 import { collectOnce } from "./collector.mjs";
 import { startLteMonitor } from "./lte-monitor.mjs";
@@ -73,6 +73,7 @@ async function restoreBridgeMode(deviceMode) {
   await notify(
     `Bridge mode lost! Router is in **${deviceMode}** mode. Attempting to re-enable bridge mode...`,
     Color.RED,
+    Tier.CRITICAL,
   );
 
   let sessionCookie;
@@ -99,12 +100,13 @@ async function restoreBridgeMode(deviceMode) {
         const { deviceMode: newMode } = await checkDeviceMode();
         if (newMode === "bridge") {
           log("Verified: Bridge mode is now active!");
-          await notify("Bridge mode successfully re-enabled!", Color.GREEN);
+          await notify("Bridge mode successfully re-enabled!", Color.GREEN, Tier.CRITICAL);
         } else {
           log(`Warning: After reboot, mode is "${newMode}" — may need manual check`);
           await notify(
             `Failed to restore bridge mode. Router is in **${newMode}** mode after reboot. Manual intervention may be needed.`,
             Color.YELLOW,
+            Tier.CRITICAL,
           );
         }
       } catch {
@@ -140,7 +142,7 @@ async function runCheck() {
     }
   } catch (err) {
     log(`Error: ${err.message}`);
-    await notify(`Error during check: ${err.message}`, Color.YELLOW);
+    await notify(`Error during check: ${err.message}`, Color.YELLOW, Tier.WARN);
   }
 }
 
@@ -164,7 +166,7 @@ if (LTE_ENABLED && !once) {
 }
 
 if (!once) {
-  await notify("Monitor started, watching for bridge mode changes.", Color.GREEN);
+  await notify("Monitor started, watching for bridge mode changes.", Color.GREEN, Tier.LOG);
 }
 
 await runCheck();

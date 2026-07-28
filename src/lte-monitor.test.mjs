@@ -8,6 +8,7 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "lte-test-"));
 process.env.LTE_LINK_GRACE_MS = "0";
 const { startLteMonitor } = await import("./lte-monitor.mjs");
 const { BALANCE_LOW_EUR } = await import("./lte.mjs");
+const { Tier } = await import("./notify.mjs");
 
 function fakeFlint(script) {
   let i = 0;
@@ -128,13 +129,70 @@ test("toggleGuard opens with expiry, second toggle relocks", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
   await m.tick();
   const g = await m.toggleGuard();
   assert.equal(g.state, "open");
   assert.ok(g.openUntil, "open sets an expiry");
-  assert.ok(sent.some((s) => /guard \*\*opened\*\*/.test(s.msg)));
+  assert.ok(sent.some((s) => /guard \*\*opened\*\*/.test(s.msg) && s.tier === Tier.LOG));
   const g2 = await m.toggleGuard();
   assert.equal(g2.state, "locked");
-  assert.ok(sent.some((s) => /guard \*\*locked\*\*/.test(s.msg)));
+  assert.ok(sent.some((s) => /guard \*\*locked\*\*/.test(s.msg) && s.tier === Tier.LOG));
+});
+
+test("guard relock messages carry their own tiers", async () => {
+  // Startup relock (nobody owns the open) is routine; a relock we did not
+  // initiate later on is worth a warning.
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "open" },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+
+  await m.tick();
+  const startup = sent.find((s) => /re-locked on startup/.test(s.msg));
+  assert.ok(startup, "startup relock announced");
+  assert.equal(startup.tier, Tier.LOG);
+
+  // someone opens the guard behind our back
+  script[0].guard = "open";
+  await m.tick();
+  const external = sent.find((s) => /opened outside the dashboard/.test(s.msg));
+  assert.ok(external, "external open announced");
+  assert.equal(external.tier, Tier.WARN);
+});
+
+test("drill result tiers: OK is muted, failure warns", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "locked" },
+  ];
+  // isDrillDue needs hour >= 03:00 UTC and a different month from the last
+  // drill. All monitors in this file share one DATA_DIR, so the state file may
+  // already hold a real-clock lastDrillTs from an earlier test — the far-future
+  // years keep both drills due regardless of what is in there, and the two
+  // distinct months keep the second drill due after the first one persists.
+  const okSent = [];
+  const okMonitor = startLteMonitor({
+    flint: fakeFlint(script), autoStart: false,
+    nowIso: () => "2099-01-01T03:00:00.000Z",
+    send: async (msg, color, tier) => okSent.push({ msg, color, tier }),
+  });
+  await okMonitor.tick();
+  const ok = okSent.find((s) => /drill OK/.test(s.msg));
+  assert.ok(ok, "drill ran and reported OK");
+  assert.equal(ok.tier, Tier.LOG);
+
+  const failSent = [];
+  const failFlint = fakeFlint(script);
+  failFlint.runDrill = async () => { throw new Error("no route to host"); };
+  const failMonitor = startLteMonitor({
+    flint: failFlint, autoStart: false,
+    nowIso: () => "2099-02-01T03:00:00.000Z",
+    send: async (msg, color, tier) => failSent.push({ msg, color, tier }),
+  });
+  await failMonitor.tick();
+  const failed = failSent.find((s) => /drill \*\*FAILED\*\*/.test(s.msg));
+  assert.ok(failed, "drill failure announced");
+  assert.equal(failed.tier, Tier.WARN);
 });

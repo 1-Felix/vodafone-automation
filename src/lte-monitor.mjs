@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.mjs";
-import { notify, Color } from "./notify.mjs";
+import { notify, Color, Tier } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
 import {
   aggregateUsage, computeBalance, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
@@ -36,6 +36,7 @@ export function startLteMonitor(deps = {}) {
   const flint = deps.flint ?? realFlint;
   const send = deps.send ?? notify;
   const autoStart = deps.autoStart ?? true;
+  const nowIso = deps.nowIso ?? (() => new Date().toISOString());
 
   mkdirSync(DATA_DIR, { recursive: true });
   const usage = loadJsonl(USAGE_FILE);
@@ -63,7 +64,7 @@ export function startLteMonitor(deps = {}) {
   let timer = null;
 
   async function tick() {
-    const ts = new Date().toISOString();
+    const ts = nowIso();
     const now = Date.now();
     const [wan, lte] = await Promise.all([
       flint.getIfaceStatus("wan"),
@@ -127,15 +128,15 @@ export function startLteMonitor(deps = {}) {
         await flint.relockGuard();
         guardState = await flint.getGuardState();
         if (guardOpenUntil === null && !firstGuardRead) {
-          await send("LTE guard was opened outside the dashboard — **re-locked** it.", Color.YELLOW);
+          await send("LTE guard was opened outside the dashboard — **re-locked** it.", Color.YELLOW, Tier.WARN);
         } else if (guardOpenUntil === null) {
-          await send("LTE guard **re-locked on startup** (was open).", Color.GREEN);
+          await send("LTE guard **re-locked on startup** (was open).", Color.GREEN, Tier.LOG);
         }
         guardOpenUntil = null;
       } catch (err) {
         if (now - lastGuardStuckAlertAt >= GUARD_STUCK_ALERT_MS) {
           lastGuardStuckAlertAt = now;
-          await send(`LTE guard relock **FAILED** (${err.message}) — guard is stuck OPEN, retrying every tick.`, Color.RED);
+          await send(`LTE guard relock **FAILED** (${err.message}) — guard is stuck OPEN, retrying every tick.`, Color.RED, Tier.CRITICAL);
         }
       }
     }
@@ -148,13 +149,14 @@ export function startLteMonitor(deps = {}) {
       guardOpenUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
     }, now);
     alertState = state;
-    for (const a of alerts) await send(a.message, a.color);
+    for (const a of alerts) await send(a.message, a.color, a.tier);
 
     if (session && shouldSendRunningUpdate(connState, lastRunningUpdateAt, now)) {
       lastRunningUpdateAt = now;
       await send(
         `LTE failover still active — session ${fmtMb(session.bytes)} MB ≈ ${fmtEur(costEur(session.bytes))}.`,
         Color.YELLOW,
+        Tier.LOG,
       );
     }
     if (!session) lastRunningUpdateAt = null;
@@ -171,12 +173,13 @@ export function startLteMonitor(deps = {}) {
               ? `Monthly LTE drill OK — ${fmtMb(r.bytes)} MB in ${r.seconds.toFixed(1)} s (~${mbit} Mbit/s), cost ≈ ${fmtEur(costEur(r.bytes))}.`
               : "Monthly LTE drill **FAILED** — check the Spitz/SIM.",
             r.ok ? Color.GREEN : Color.RED,
+            r.ok ? Tier.LOG : Tier.WARN,
           );
         } catch (err) {
-          await send(`Monthly LTE drill **FAILED**: ${err.message}`, Color.RED);
+          await send(`Monthly LTE drill **FAILED**: ${err.message}`, Color.RED, Tier.WARN);
         }
       } else {
-        await send("Monthly LTE drill skipped — fallback is disarmed.", Color.YELLOW);
+        await send("Monthly LTE drill skipped — fallback is disarmed.", Color.YELLOW, Tier.WARN);
       }
     }
 
