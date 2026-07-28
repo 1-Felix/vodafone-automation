@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "./log.mjs";
-import { notify, Color } from "./notify.mjs";
+import { notify, Color, Tier } from "./notify.mjs";
 import { checkDeviceMode, getDocsisStatus, getEventLog, login, logout } from "./station.mjs";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -79,6 +79,7 @@ export function deriveAlerts(state, snapshot, newDocsisEvents, now) {
     alerts.push({
       message: `Station firmware changed: \`${state.firmware}\` → \`${snapshot.firmware}\`. Watch for setting resets (bridge mode!).`,
       color: Color.YELLOW,
+      tier: Tier.LOG,
     });
   }
   next.firmware = snapshot.firmware ?? state.firmware;
@@ -88,9 +89,10 @@ export function deriveAlerts(state, snapshot, newDocsisEvents, now) {
     alerts.push({
       message: `DOCSIS no longer online: **${snapshot.operational}**`,
       color: Color.RED,
+      tier: Tier.CRITICAL,
     });
   } else if (state.online === false && online) {
-    alerts.push({ message: "DOCSIS back online.", color: Color.GREEN });
+    alerts.push({ message: "DOCSIS back online.", color: Color.GREEN, tier: Tier.CRITICAL });
   }
   next.online = online;
 
@@ -99,12 +101,14 @@ export function deriveAlerts(state, snapshot, newDocsisEvents, now) {
       alerts.push({
         message: `Upstream TX power critical: **${snapshot.usMaxPower} dBmV** (healthy ≤ 47, critical > ${US_POWER_WARN_DBMV}). Signal path is degraded.`,
         color: Color.YELLOW,
+        tier: Tier.LOG,
       });
       next.usPowerHigh = true;
     } else if (state.usPowerHigh && snapshot.usMaxPower <= US_POWER_CLEAR_DBMV) {
       alerts.push({
         message: `Upstream TX power recovered: ${snapshot.usMaxPower} dBmV.`,
         color: Color.GREEN,
+        tier: Tier.LOG,
       });
       next.usPowerHigh = false;
     }
@@ -115,6 +119,7 @@ export function deriveAlerts(state, snapshot, newDocsisEvents, now) {
     alerts.push({
       message: `${t3Count} new T3/T4 ranging time-out(s) in the Station event log — upstream is failing intermittently.`,
       color: Color.YELLOW,
+      tier: Tier.LOG,
     });
     next.lastT3AlertAt = now;
   }
@@ -203,6 +208,6 @@ export async function collectOnce() {
   );
 
   for (const a of alerts) {
-    await notify(a.message, a.color);
+    await notify(a.message, a.color, a.tier);
   }
 }

@@ -9,6 +9,7 @@ import {
   US_POWER_WARN_DBMV,
   T3_ALERT_COOLDOWN_MS,
 } from "./collector.mjs";
+import { Tier } from "./notify.mjs";
 
 test("parseDbmv extracts numbers and rejects garbage", () => {
   assert.equal(parseDbmv("55.0 dBmV"), 55);
@@ -60,6 +61,7 @@ test("upstream power alert is edge-triggered with hysteresis", () => {
   let r = deriveAlerts({}, high, [], 0);
   assert.equal(r.alerts.length, 1);
   assert.match(r.alerts[0].message, /Upstream TX power critical/);
+  assert.equal(r.alerts[0].tier, Tier.LOG);
 
   // same condition again -> no repeat alert
   r = deriveAlerts(r.state, high, [], 0);
@@ -73,6 +75,9 @@ test("upstream power alert is edge-triggered with hysteresis", () => {
   r = deriveAlerts(r.state, { ...okSnapshot, usMaxPower: US_POWER_WARN_DBMV - 3 }, [], 0);
   assert.equal(r.alerts.length, 1);
   assert.match(r.alerts[0].message, /recovered/);
+  // recovery pairs with its problem: both muted, so no green ping for a
+  // condition whose onset was never announced
+  assert.equal(r.alerts[0].tier, Tier.LOG);
 });
 
 test("firmware change alerts once", () => {
@@ -82,6 +87,7 @@ test("firmware change alerts once", () => {
   r = deriveAlerts(r.state, { ...okSnapshot, firmware: "5.0.3XY" }, [], 0);
   assert.equal(r.alerts.length, 1);
   assert.match(r.alerts[0].message, /firmware changed/);
+  assert.equal(r.alerts[0].tier, Tier.LOG);
 
   r = deriveAlerts(r.state, { ...okSnapshot, firmware: "5.0.3XY" }, [], 0);
   assert.equal(r.alerts.length, 0);
@@ -92,6 +98,7 @@ test("offline and recovery transitions alert once each", () => {
   r = deriveAlerts(r.state, { ...okSnapshot, operational: "Docsis_Scanning" }, [], 0);
   assert.equal(r.alerts.length, 1);
   assert.match(r.alerts[0].message, /no longer online/);
+  assert.equal(r.alerts[0].tier, Tier.CRITICAL);
 
   r = deriveAlerts(r.state, { ...okSnapshot, operational: "Docsis_Scanning" }, [], 0);
   assert.equal(r.alerts.length, 0);
@@ -99,6 +106,7 @@ test("offline and recovery transitions alert once each", () => {
   r = deriveAlerts(r.state, okSnapshot, [], 0);
   assert.equal(r.alerts.length, 1);
   assert.match(r.alerts[0].message, /back online/);
+  assert.equal(r.alerts[0].tier, Tier.CRITICAL);
 });
 
 test("T3 alerts are rate-limited to one per cooldown window", () => {
@@ -107,6 +115,7 @@ test("T3 alerts are rate-limited to one per cooldown window", () => {
 
   let r = deriveAlerts({}, okSnapshot, t3, t0);
   assert.equal(r.alerts.filter((a) => /time-out/.test(a.message)).length, 1);
+  assert.equal(r.alerts[0].tier, Tier.LOG);
 
   // more T3s five minutes later -> suppressed
   r = deriveAlerts(r.state, okSnapshot, t3, t0 + 5 * 60 * 1000);
