@@ -86,7 +86,10 @@ Copy `.env.example` to `.env` and adjust:
 | `ROUTER_IP` | `192.168.100.1` | Router admin IP |
 | `ROUTER_USER` | `admin` | Router admin username |
 | `ROUTER_PASS` | — | Router admin password (check the sticker on your router) |
-| `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for notifications |
+| `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for notifications; fallback for any tier below |
+| `DISCORD_WEBHOOK_CRITICAL` | — | Optional `#vf-critical` webhook (outages, failover, bridge lost). Falls back to `DISCORD_WEBHOOK_URL` |
+| `DISCORD_WEBHOOK_WARN` | — | Optional `#vf-warn` webhook (balance low, backup broken, poll errors). Falls back to `DISCORD_WEBHOOK_URL` |
+| `DISCORD_WEBHOOK_LOG` | — | Optional `#vf-log` webhook (signal telemetry, state toggles, drill OK). Falls back to `DISCORD_WEBHOOK_URL` |
 | `CHECK_INTERVAL_MS` | `300000` | Check interval in ms (default: 5 min) |
 | `COLLECTOR_ENABLED` | `true` | Set `false` to disable the DOCSIS signal collector |
 | `DATA_DIR` | `./data` | Where the collector writes `levels.jsonl` / `events.jsonl` |
