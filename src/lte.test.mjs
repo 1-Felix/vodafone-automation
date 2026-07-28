@@ -64,7 +64,7 @@ test("shouldSendRunningUpdate: every 30 min while LTE active", () => {
 // --- deriveLteAlerts ---
 
 import { deriveLteAlerts } from "./lte.mjs";
-import { Color } from "./notify.mjs";
+import { Color, Tier } from "./notify.mjs";
 
 const NOW = 1_800_000_000_000;
 
@@ -77,6 +77,7 @@ test("alert on failover start", () => {
   assert.equal(alerts.length, 1);
   assert.match(alerts[0].message, /Failover active/);
   assert.equal(alerts[0].color, Color.RED);
+  assert.equal(alerts[0].tier, Tier.CRITICAL);
   assert.equal(state.connState, "LTE_ACTIVE");
 });
 
@@ -97,6 +98,9 @@ test("alert with cost summary on failover end", () => {
   assert.match(alerts[0].message, /50\.0 MB/);
   assert.match(alerts[0].message, /1\.50 €/);
   assert.equal(alerts[0].color, Color.GREEN);
+  // pairs with failover start — both critical, because a session ending is
+  // the all-clear for money burning
+  assert.equal(alerts[0].tier, Tier.CRITICAL);
 });
 
 test("alert on disarm and re-arm", () => {
@@ -104,9 +108,11 @@ test("alert on disarm and re-arm", () => {
     { connState: "CABLE_OK", armed: true, backupOk: true },
     { connState: "CABLE_OK", armed: false, backupOk: true, closedSession: null }, NOW);
   assert.match(a.alerts[0].message, /disarmed/);
+  assert.equal(a.alerts[0].tier, Tier.LOG);
   const b = deriveLteAlerts(a.state,
     { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null }, NOW);
   assert.match(b.alerts[0].message, /armed/);
+  assert.equal(b.alerts[0].tier, Tier.LOG);
 });
 
 test("backup-broken alert once per cooldown, only while cable ok", () => {
@@ -115,6 +121,7 @@ test("backup-broken alert once per cooldown, only while cable ok", () => {
     { connState: "CABLE_OK", armed: true, backupOk: false, closedSession: null }, NOW);
   assert.equal(first.alerts.length, 1);
   assert.match(first.alerts[0].message, /broken/);
+  assert.equal(first.alerts[0].tier, Tier.WARN);
   const second = deriveLteAlerts(first.state,
     { connState: "CABLE_OK", armed: true, backupOk: false, closedSession: null }, NOW + 60_000);
   assert.equal(second.alerts.length, 0);
@@ -139,6 +146,7 @@ test("low balance alerts once, repeats after 24 h while low", () => {
   assert.equal(a.alerts.length, 1);
   assert.match(a.alerts[0].message, /8\.50 €/);
   assert.equal(a.alerts[0].color, Color.YELLOW);
+  assert.equal(a.alerts[0].tier, Tier.WARN);
   const b = deriveLteAlerts(a.state, { ...STEADY, balanceEur: 8.4 }, NOW + 60_000);
   assert.equal(b.alerts.length, 0);
   const c = deriveLteAlerts(b.state, { ...STEADY, balanceEur: 8.4 }, NOW + BALANCE_ALERT_REPEAT_MS + 1);
@@ -156,12 +164,17 @@ test("guard transitions alert: open YELLOW with until-time, relock GREEN, missin
   assert.equal(open.alerts.length, 1);
   assert.equal(open.alerts[0].color, Color.YELLOW);
   assert.match(open.alerts[0].message, /13:45/);
+  // open/locked are self-inflicted dashboard toggles — muted
+  assert.equal(open.alerts[0].tier, Tier.LOG);
   const lock = deriveLteAlerts(open.state, { ...STEADY, guardState: "locked" }, NOW);
   assert.equal(lock.alerts.length, 1);
   assert.equal(lock.alerts[0].color, Color.GREEN);
+  assert.equal(lock.alerts[0].tier, Tier.LOG);
   const miss = deriveLteAlerts(lock.state, { ...STEADY, guardState: "missing" }, NOW);
   assert.equal(miss.alerts.length, 1);
   assert.equal(miss.alerts[0].color, Color.RED);
+  // nobody asked for this one — the guard is gone and LTE is unrestricted
+  assert.equal(miss.alerts[0].tier, Tier.CRITICAL);
 });
 
 test("guard first observation: locked silent, missing alerts", () => {
@@ -169,6 +182,16 @@ test("guard first observation: locked silent, missing alerts", () => {
   const miss = deriveLteAlerts({ ...STEADY }, { ...STEADY, guardState: "missing" }, NOW);
   assert.equal(miss.alerts.length, 1);
   assert.equal(miss.alerts[0].color, Color.RED);
+  assert.equal(miss.alerts[0].tier, Tier.CRITICAL);
+});
+
+test("ALL DOWN alerts critical", () => {
+  const { alerts } = deriveLteAlerts(
+    { connState: "CABLE_OK", armed: true, backupOk: true },
+    { connState: "ALL_DOWN", armed: false, backupOk: false, closedSession: null }, NOW);
+  assert.match(alerts[0].message, /ALL DOWN/);
+  assert.equal(alerts[0].color, Color.RED);
+  assert.equal(alerts[0].tier, Tier.CRITICAL);
 });
 
 import { computeBalance } from "./lte.mjs";

@@ -1,4 +1,4 @@
-import { Color } from "./notify.mjs";
+import { Color, Tier } from "./notify.mjs";
 
 export const RATE_PER_MB = parseFloat(process.env.LTE_COST_PER_MB ?? "0.03");
 export const FAST_SAMPLE_MS = 60_000;
@@ -87,6 +87,7 @@ export function deriveLteAlerts(state, curr, now) {
       alerts.push({
         message: `**Failover active** — traffic is running over LTE at ${(RATE_PER_MB * 100).toFixed(0)} ct/MB. ${DASHBOARD_URL}`,
         color: Color.RED,
+        tier: Tier.CRITICAL,
       });
     } else if (state.connState === "LTE_ACTIVE" && curr.closedSession) {
       const s = curr.closedSession;
@@ -94,11 +95,13 @@ export function deriveLteAlerts(state, curr, now) {
       alerts.push({
         message: `Failover ended after ${mins} min — ${fmtMb(s.bytes)} MB ≈ ${fmtEur(costEur(s.bytes))}.`,
         color: Color.GREEN,
+        tier: Tier.CRITICAL,
       });
     } else if (curr.connState === "ALL_DOWN") {
       alerts.push({
         message: `**ALL DOWN** — cable is down and LTE fallback is ${curr.armed ? "unavailable" : "disarmed"}.`,
         color: Color.RED,
+        tier: Tier.CRITICAL,
       });
     }
   }
@@ -106,8 +109,8 @@ export function deriveLteAlerts(state, curr, now) {
   if (state.armed !== undefined && state.armed !== curr.armed) {
     alerts.push(
       curr.armed
-        ? { message: "LTE fallback **armed**.", color: Color.GREEN }
-        : { message: "LTE fallback **disarmed** — no automatic failover until re-armed.", color: Color.YELLOW },
+        ? { message: "LTE fallback **armed**.", color: Color.GREEN, tier: Tier.LOG }
+        : { message: "LTE fallback **disarmed** — no automatic failover until re-armed.", color: Color.YELLOW, tier: Tier.LOG },
     );
   }
 
@@ -119,6 +122,7 @@ export function deriveLteAlerts(state, curr, now) {
     alerts.push({
       message: "LTE backup looks **broken** (health ping via Spitz failed) — failover would not work right now.",
       color: Color.YELLOW,
+      tier: Tier.WARN,
     });
     next.lastBackupAlertAt = now;
   }
@@ -130,6 +134,7 @@ export function deriveLteAlerts(state, curr, now) {
     alerts.push({
       message: `CallYa balance low: **${fmtEur(curr.balanceEur)}** — top up soon, the LTE fallback dies with the credit.`,
       color: Color.YELLOW,
+      tier: Tier.WARN,
     });
     next.lastBalanceAlertAt = now;
   }
@@ -140,16 +145,19 @@ export function deriveLteAlerts(state, curr, now) {
       alerts.push({
         message: `LTE guard **opened** — ALL devices may use LTE${curr.guardOpenUntil ? ` until ${curr.guardOpenUntil.slice(11, 16)} UTC` : ""}.`,
         color: Color.YELLOW,
+        tier: Tier.LOG,
       });
     } else if (curr.guardState === "locked") {
       alerts.push({
         message: "LTE guard **locked** — only allowlisted devices (NUC, Felix-PC) may use LTE.",
         color: Color.GREEN,
+        tier: Tier.LOG,
       });
     } else if (curr.guardState === "missing") {
       alerts.push({
         message: "LTE guard chain **missing** on the Flint — LTE is unrestricted for all devices. Reinstall /etc/firewall.lte_guard.",
         color: Color.RED,
+        tier: Tier.CRITICAL,
       });
     }
   }
