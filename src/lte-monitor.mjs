@@ -39,6 +39,7 @@ export function startLteMonitor(deps = {}) {
   const send = deps.send ?? notify;
   const autoStart = deps.autoStart ?? true;
   const nowIso = deps.nowIso ?? (() => new Date().toISOString());
+  const retryDelayMs = deps.retryDelayMs ?? 4_000;
 
   mkdirSync(DATA_DIR, { recursive: true });
   const usage = loadJsonl(USAGE_FILE);
@@ -161,8 +162,10 @@ export function startLteMonitor(deps = {}) {
     // leak can never drain a top-up to zero again. Manual recovery on purpose.
     if (shouldAutoDisarm({ connState, armed, balanceEur })) {
       try {
-        await flint.setLteArmed(false);
+        // Modem first: SSH to the Spitz rides on secondwan/lan5, so disarming
+        // the Flint first would strand a live, billing modem behind a dead link.
         await spitz.setModemUp(false);
+        await flint.setLteArmed(false);
         await send(
           `CallYa balance at the reserve floor (**${fmtEur(balanceEur)}** ≤ ${fmtEur(BALANCE_RESERVE_EUR)}) — LTE fallback **auto-disarmed** and Spitz modem taken offline. Top up, set the new balance in the dashboard, then re-arm.`,
           Color.RED,
@@ -250,8 +253,22 @@ export function startLteMonitor(deps = {}) {
     const lte = await flint.getIfaceStatus(LTE_IFACE);
     await flint.setLteArmed(!lte.autostart);
     // Re-arming must also undo a balance-floor modem kill; ifup on an already
-    // up modem is a no-op on the Spitz.
-    if (!lte.autostart) await spitz.setModemUp(true);
+    // up modem is a no-op on the Spitz. The Spitz only becomes reachable a few
+    // DHCP seconds after secondwan comes up, hence the retries.
+    if (!lte.autostart) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await spitz.setModemUp(true);
+          break;
+        } catch (err) {
+          if (attempt >= 2) {
+            await send(`Re-arm: bringing the Spitz modem up **FAILED** (${err.message}) — the backup stays broken until it is up.`, Color.YELLOW, Tier.WARN);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, retryDelayMs));
+        }
+      }
+    }
     await tick();
     return !lte.autostart;
   }

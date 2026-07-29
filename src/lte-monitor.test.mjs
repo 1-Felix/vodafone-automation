@@ -125,12 +125,19 @@ test("balance at reserve floor auto-disarms and takes the modem down", async () 
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
   ];
   const flint = fakeFlint(script);
+  const calls = [];
+  const origArm = flint.setLteArmed, origModem = flint.setModemUp;
+  flint.setLteArmed = async (up) => { calls.push(["arm", up]); return origArm(up); };
+  flint.setModemUp = async (up) => { calls.push(["modem", up]); return origModem(up); };
   const sent = [];
   const m = startLteMonitor({ flint, spitz: flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
   await m.tick();
   await m.setBalance(0.4); // ≤ reserve → the setBalance-triggered tick must kill the drain
   assert.equal(script[0].armedSet, false, "secondwan disarmed");
   assert.equal(script[0].modemSet, false, "Spitz modem taken down");
+  // SSH to the Spitz rides on secondwan/lan5 — the modem MUST go down before
+  // the Flint interface, or the kill strands a live modem behind a dead link.
+  assert.deepEqual(calls, [["modem", false], ["arm", false]]);
   const alert = sent.find((s) => /auto-disarmed/i.test(s.msg));
   assert.ok(alert, "auto-disarm announced");
   assert.equal(alert.tier, Tier.CRITICAL);
@@ -147,6 +154,22 @@ test("re-arming brings the Spitz modem back up", async () => {
   assert.equal(armed, true);
   assert.equal(script[0].armedSet, true);
   assert.equal(script[0].modemSet, true, "modem brought up on re-arm");
+});
+
+test("re-arm retries the modem ifup while secondwan DHCP settles", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: false, device: "lan5" }, counter: 0 },
+  ];
+  const flint = fakeFlint(script);
+  let failures = 2;
+  flint.setModemUp = async (up) => {
+    if (failures-- > 0) throw new Error("connect timed out");
+    script[0].modemSet = up;
+  };
+  const m = startLteMonitor({ flint, spitz: flint, send: async () => {}, autoStart: false, retryDelayMs: 0 });
+  await m.tick();
+  await m.toggleArmed();
+  assert.equal(script[0].modemSet, true, "modem up after retries");
 });
 
 test("setBalance rejects garbage", async () => {
