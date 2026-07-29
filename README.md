@@ -129,6 +129,20 @@ member `secondwan`):
   (`BALANCE_LOW_EUR`, also drawn as the dashed reserve line on the gauge and
   returned as `balance.lowEur`). (USSD from the Spitz itself is impossible: the EG120K
   modem is LTE-only without IMS, so the network times out on `*100#`.)
+- Balance reserve floor (`BALANCE_RESERVE_EUR`, default 0.50 €): when the tracked
+  balance reaches the floor with the cable healthy, the monitor auto-disarms the
+  fallback and takes the Spitz modem offline (`ifdown modem_2_1`) so background
+  traffic cannot drain the credit to zero. Recovery is deliberate and manual:
+  top up, enter the new balance on the dashboard, then re-arm (re-arming also
+  brings the modem back up). If the floor is hit *during* a failover the link is
+  left alone and a critical alert fires instead.
+- Leak watchdog (`LEAK_ALERT_MB`, default 3 MB/day): background cellular usage
+  (bytes metered with no failover session running) above the threshold raises a
+  WARN, 5× the threshold a CRITICAL. Lesson from 2026-07-29, when the first €5
+  of credit vanished in two days: GL firmware background chatter (a broken
+  `get_current_time` retry loop hammering worldtimeapi.org, GoodCloud, kmwan
+  probe storms, Spitz DNS advertised to the LAN) can silently out-spend the
+  actual failover many times over.
 - LTE guard: only allowlisted devices (NUC, Felix-PC) may forward onto the LTE
   uplink — everything else is rejected while on failover. Allowlist lives in
   `/etc/firewall.lte_guard` on the Flint (persistent iptables include). The

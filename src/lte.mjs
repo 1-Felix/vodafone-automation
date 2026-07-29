@@ -59,6 +59,28 @@ export function computeBalance(anchor, usageEntries) {
   return Math.max(0, Math.round((anchor.eur - costEur(bytes)) * 100) / 100);
 }
 
+// Reserve floor: at/below this tracked balance the monitor kills the LTE path
+// (disarm + Spitz modem down) so background traffic cannot silently drain a
+// top-up to zero again. Recovery is manual: top up, set balance, re-arm.
+export const BALANCE_RESERVE_EUR = parseFloat(process.env.BALANCE_RESERVE_EUR ?? "0.5");
+export const RESERVE_ALERT_COOLDOWN_MS = 6 * 60 * 60_000;
+// Background = metered cellular bytes with no failover session carrying them.
+// The SIM should cost ~nothing while the cable is healthy; anything above this
+// per day is a leak (kmwan probe storms, GL cloud/timezone loops, DNS drift).
+export const LEAK_ALERT_MB = parseFloat(process.env.LEAK_ALERT_MB ?? "3");
+
+export function backgroundBytes(entries, nowIso) {
+  const day = nowIso.slice(0, 10);
+  let b = 0;
+  for (const e of entries) if (!e.s && e.ts.slice(0, 10) === day) b += e.bytes;
+  return b;
+}
+
+export function shouldAutoDisarm({ connState, armed, balanceEur }) {
+  return connState === "CABLE_OK" && !!armed &&
+    typeof balanceEur === "number" && balanceEur <= BALANCE_RESERVE_EUR;
+}
+
 export function shouldSendRunningUpdate(connState, lastUpdateAt, now) {
   return connState === "LTE_ACTIVE" && now - (lastUpdateAt ?? 0) >= RUNNING_UPDATE_MS;
 }
@@ -137,6 +159,38 @@ export function deriveLteAlerts(state, curr, now) {
       tier: Tier.WARN,
     });
     next.lastBalanceAlertAt = now;
+  }
+
+  const today = new Date(now).toISOString().slice(0, 10);
+  const bgMb = (curr.bgBytes ?? 0) / 1e6;
+  if (bgMb >= LEAK_ALERT_MB * 5 && state.lastLeakCritDay !== today) {
+    alerts.push({
+      message: `Background LTE **leak**: ${fmtMb(curr.bgBytes)} MB today (≈ ${fmtEur(costEur(curr.bgBytes))}) with the cable healthy — something is burning credit over the SIM. ${DASHBOARD_URL}`,
+      color: Color.RED,
+      tier: Tier.CRITICAL,
+    });
+    next.lastLeakCritDay = today;
+    next.lastLeakWarnDay = today;
+  } else if (bgMb >= LEAK_ALERT_MB && state.lastLeakWarnDay !== today) {
+    alerts.push({
+      message: `Background LTE usage today: **${fmtMb(curr.bgBytes)} MB** (≈ ${fmtEur(costEur(curr.bgBytes))}) with the cable healthy — the SIM should be near-silent. ${DASHBOARD_URL}`,
+      color: Color.YELLOW,
+      tier: Tier.WARN,
+    });
+    next.lastLeakWarnDay = today;
+  }
+
+  if (
+    curr.connState === "LTE_ACTIVE" &&
+    typeof curr.balanceEur === "number" && curr.balanceEur <= BALANCE_RESERVE_EUR &&
+    now - (state.lastReserveAlertAt ?? 0) >= RESERVE_ALERT_COOLDOWN_MS
+  ) {
+    alerts.push({
+      message: `CallYa balance at the reserve floor (**${fmtEur(curr.balanceEur)}**) while failover is ACTIVE — the connection dies when the credit hits 0. Top up now.`,
+      color: Color.RED,
+      tier: Tier.CRITICAL,
+    });
+    next.lastReserveAlertAt = now;
   }
 
   if (curr.guardState && curr.guardState !== state.guardState &&

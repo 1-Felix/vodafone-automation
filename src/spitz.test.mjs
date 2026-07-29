@@ -10,3 +10,9 @@ test("parseCountersTotal returns null on garbage", () => {
   assert.equal(parseCountersTotal("cat: no such file\n"), null);
   assert.equal(parseCountersTotal("ERR\n"), null);
 });
+
+import { setModemUp } from "./spitz.mjs";
+
+test("setModemUp is exported for the balance-floor kill switch", () => {
+  assert.equal(typeof setModemUp, "function");
+});

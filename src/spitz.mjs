@@ -46,6 +46,13 @@ export function spitzSsh(command) {
  * exactly the failure this monitor exists to report, so it must not take the
  * whole tick down with it.
  */
+// Balance-floor kill switch: taking the modem interface down detaches the PDP
+// context, so the Spitz's own housekeeping cannot bill the SIM either. ifup
+// from the dashboard's re-arm restores it.
+export async function setModemUp(up) {
+  await spitzSsh(`${up ? "ifup" : "ifdown"} ${MODEM_IFACE}`);
+}
+
 export async function readCellularCounters() {
   try {
     const out = await spitzSsh(

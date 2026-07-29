@@ -194,6 +194,66 @@ test("ALL DOWN alerts critical", () => {
   assert.equal(alerts[0].tier, Tier.CRITICAL);
 });
 
+import {
+  backgroundBytes, shouldAutoDisarm, LEAK_ALERT_MB, BALANCE_RESERVE_EUR,
+} from "./lte.mjs";
+
+test("backgroundBytes: sums untagged entries for the current day only", () => {
+  const entries = [
+    { ts: "2026-07-29T01:00:00Z", bytes: 1_000_000 },          // background today
+    { ts: "2026-07-29T02:00:00Z", bytes: 2_000_000, s: 1 },    // session traffic — excluded
+    { ts: "2026-07-28T02:00:00Z", bytes: 4_000_000 },          // yesterday — excluded
+  ];
+  assert.equal(backgroundBytes(entries, "2026-07-29T12:00:00.000Z"), 1_000_000);
+});
+
+test("shouldAutoDisarm: only armed + cable ok + tracked balance at/below reserve", () => {
+  const base = { connState: "CABLE_OK", armed: true, balanceEur: BALANCE_RESERVE_EUR };
+  assert.equal(shouldAutoDisarm(base), true);
+  assert.equal(shouldAutoDisarm({ ...base, balanceEur: BALANCE_RESERVE_EUR + 0.01 }), false);
+  assert.equal(shouldAutoDisarm({ ...base, armed: false }), false);
+  assert.equal(shouldAutoDisarm({ ...base, connState: "LTE_ACTIVE" }), false);
+  assert.equal(shouldAutoDisarm({ ...base, connState: "ALL_DOWN" }), false);
+  assert.equal(shouldAutoDisarm({ ...base, balanceEur: null }), false);
+});
+
+test("background leak warns once per day, escalates critical at 5x", () => {
+  const warnBytes = LEAK_ALERT_MB * 1e6;
+  const a = deriveLteAlerts({ ...STEADY }, { ...STEADY, bgBytes: warnBytes }, NOW);
+  assert.equal(a.alerts.length, 1);
+  assert.match(a.alerts[0].message, /[Bb]ackground/);
+  assert.equal(a.alerts[0].color, Color.YELLOW);
+  assert.equal(a.alerts[0].tier, Tier.WARN);
+  // same day, still leaking a bit more — silent
+  const b = deriveLteAlerts(a.state, { ...STEADY, bgBytes: warnBytes * 2 }, NOW + 60_000);
+  assert.equal(b.alerts.length, 0);
+  // crosses the critical threshold the same day — escalates once
+  const c = deriveLteAlerts(b.state, { ...STEADY, bgBytes: warnBytes * 5 }, NOW + 120_000);
+  assert.equal(c.alerts.length, 1);
+  assert.equal(c.alerts[0].tier, Tier.CRITICAL);
+  // next day, leak persists — warns again
+  const d = deriveLteAlerts(c.state, { ...STEADY, bgBytes: warnBytes }, NOW + 86_400_000);
+  assert.equal(d.alerts.length, 1);
+  assert.equal(d.alerts[0].tier, Tier.WARN);
+});
+
+test("background usage below threshold stays silent", () => {
+  const { alerts } = deriveLteAlerts(
+    { ...STEADY }, { ...STEADY, bgBytes: LEAK_ALERT_MB * 1e6 - 1 }, NOW);
+  assert.equal(alerts.length, 0);
+});
+
+test("reserve floor during active failover warns critical without disarm intent", () => {
+  const active = { connState: "LTE_ACTIVE", armed: true, backupOk: true, closedSession: null };
+  const a = deriveLteAlerts({ ...active }, { ...active, balanceEur: BALANCE_RESERVE_EUR }, NOW);
+  const reserve = a.alerts.find((x) => /reserve/i.test(x.message));
+  assert.ok(reserve, "reserve alert sent");
+  assert.equal(reserve.tier, Tier.CRITICAL);
+  // repeat within cooldown — silent
+  const b = deriveLteAlerts(a.state, { ...active, balanceEur: 0.1 }, NOW + 60_000);
+  assert.equal(b.alerts.filter((x) => /reserve/i.test(x.message)).length, 0);
+});
+
 import { computeBalance } from "./lte.mjs";
 
 test("computeBalance: anchor minus metered usage since anchor", () => {

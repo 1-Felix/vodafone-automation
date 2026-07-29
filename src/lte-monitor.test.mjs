@@ -18,6 +18,7 @@ function fakeFlint(script) {
     getIfaceStatus: async (iface) => cur()[iface],
     readCellularCounters: async () => cur().counter,
     setLteArmed: async (up) => { cur().armedSet = up; },
+    setModemUp: async (up) => { cur().modemSet = up; },
     healthPing: async () => true,
     runDrill: async () => ({ ok: true, bytes: 2_000_000, seconds: 1.5 }),
     getGuardState: async () => cur().guard ?? "locked",
@@ -101,6 +102,51 @@ test("tracked balance: set anchor, decrements with usage, alerts when low", asyn
   assert.equal(status.balance.anchorEur, 10.2);
   assert.equal(status.balance.lowEur, BALANCE_LOW_EUR); // dashboard draws the reserve line from this
   assert.ok(sent.some((s) => /balance low/i.test(s.msg)));
+});
+
+test("background usage with healthy cable triggers the leak alert", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 4_000_000 },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, spitz: flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+  await m.tick(); flint.advance(); // baseline
+  await m.tick();                  // +4 MB with no failover session
+  const leak = sent.find((s) => /background/i.test(s.msg));
+  assert.ok(leak, "leak alert sent");
+  assert.equal(leak.tier, Tier.WARN);
+  assert.match(leak.msg, /4\.0 MB/);
+});
+
+test("balance at reserve floor auto-disarms and takes the modem down", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, spitz: flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+  await m.tick();
+  await m.setBalance(0.4); // ≤ reserve → the setBalance-triggered tick must kill the drain
+  assert.equal(script[0].armedSet, false, "secondwan disarmed");
+  assert.equal(script[0].modemSet, false, "Spitz modem taken down");
+  const alert = sent.find((s) => /auto-disarmed/i.test(s.msg));
+  assert.ok(alert, "auto-disarm announced");
+  assert.equal(alert.tier, Tier.CRITICAL);
+});
+
+test("re-arming brings the Spitz modem back up", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: false, device: "lan5" }, counter: 0 },
+  ];
+  const flint = fakeFlint(script);
+  const m = startLteMonitor({ flint, spitz: flint, send: async () => {}, autoStart: false });
+  await m.tick();
+  const armed = await m.toggleArmed();
+  assert.equal(armed, true);
+  assert.equal(script[0].armedSet, true);
+  assert.equal(script[0].modemSet, true, "modem brought up on re-arm");
 });
 
 test("setBalance rejects garbage", async () => {

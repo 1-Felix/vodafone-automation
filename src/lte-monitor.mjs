@@ -5,9 +5,9 @@ import { notify, Color, Tier } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
 import * as realSpitz from "./spitz.mjs";
 import {
-  aggregateUsage, computeBalance, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
-  fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
-  BALANCE_LOW_EUR, LINK_GRACE_MS, SLOW_SAMPLE_MS,
+  aggregateUsage, backgroundBytes, computeBalance, costEur, deltaBytes, deriveConnState,
+  deriveLteAlerts, fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldAutoDisarm,
+  shouldSendRunningUpdate, BALANCE_LOW_EUR, BALANCE_RESERVE_EUR, LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
 
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -78,7 +78,9 @@ export function startLteMonitor(deps = {}) {
     const delta = counter === null ? 0 : deltaBytes(lastCounter, counter);
     if (counter !== null) lastCounter = counter;
     if (delta > 0) {
-      const entry = { ts, bytes: delta };
+      // Bytes metered while a session is running belong to the failover; the
+      // rest is background spend the leak watchdog totals per day.
+      const entry = session ? { ts, bytes: delta, s: 1 } : { ts, bytes: delta };
       appendFileSync(USAGE_FILE, JSON.stringify(entry) + "\n");
       usage.push(entry);
       if (session) session.bytes += delta;
@@ -144,14 +146,32 @@ export function startLteMonitor(deps = {}) {
     }
     if (guardState !== "open") guardOpenUntil = null;
 
+    const balanceEur = computeBalance(anchor, usage);
     const { alerts, state } = deriveLteAlerts(alertState, {
       connState, armed, backupOk, closedSession,
-      balanceEur: computeBalance(anchor, usage),
+      balanceEur,
+      bgBytes: backgroundBytes(usage, ts),
       guardState,
       guardOpenUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
     }, now);
     alertState = state;
     for (const a of alerts) await send(a.message, a.color, a.tier);
+
+    // Balance reserve floor: kill the LTE path before the credit is gone, so a
+    // leak can never drain a top-up to zero again. Manual recovery on purpose.
+    if (shouldAutoDisarm({ connState, armed, balanceEur })) {
+      try {
+        await flint.setLteArmed(false);
+        await spitz.setModemUp(false);
+        await send(
+          `CallYa balance at the reserve floor (**${fmtEur(balanceEur)}** ≤ ${fmtEur(BALANCE_RESERVE_EUR)}) — LTE fallback **auto-disarmed** and Spitz modem taken offline. Top up, set the new balance in the dashboard, then re-arm.`,
+          Color.RED,
+          Tier.CRITICAL,
+        );
+      } catch (err) {
+        await send(`Auto-disarm at the balance reserve floor **FAILED** (${err.message}) — the SIM can still spend money!`, Color.RED, Tier.CRITICAL);
+      }
+    }
 
     if (session && shouldSendRunningUpdate(connState, lastRunningUpdateAt, now)) {
       lastRunningUpdateAt = now;
@@ -229,6 +249,9 @@ export function startLteMonitor(deps = {}) {
   async function toggleArmed() {
     const lte = await flint.getIfaceStatus(LTE_IFACE);
     await flint.setLteArmed(!lte.autostart);
+    // Re-arming must also undo a balance-floor modem kill; ifup on an already
+    // up modem is a no-op on the Spitz.
+    if (!lte.autostart) await spitz.setModemUp(true);
     await tick();
     return !lte.autostart;
   }
