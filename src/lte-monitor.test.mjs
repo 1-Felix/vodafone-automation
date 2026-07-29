@@ -16,7 +16,7 @@ function fakeFlint(script) {
   return {
     advance: () => i++,
     getIfaceStatus: async (iface) => cur()[iface],
-    readCountersTotal: async () => cur().counter,
+    readCellularCounters: async () => cur().counter,
     setLteArmed: async (up) => { cur().armedSet = up; },
     healthPing: async () => true,
     runDrill: async () => ({ ok: true, bytes: 2_000_000, seconds: 1.5 }),
@@ -35,7 +35,7 @@ test("failover session lifecycle produces alerts and usage", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
   await m.tick(); flint.advance(); // baseline, CABLE_OK
   await m.tick(); flint.advance(); // wan down → LTE_ACTIVE
@@ -59,7 +59,7 @@ test("dead Spitz link marks backup broken and recovers on relink", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
   await m.tick(); flint.advance(); // link down, grace 0 in test → broken
   assert.ok(sent.some((s) => /broken/.test(s.msg)));
@@ -73,7 +73,7 @@ test("toggleArmed disarms via flint and reports state", async () => {
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
   ];
   const flint = fakeFlint(script);
-  const m = startLteMonitor({ flint, send: async () => {}, autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async () => {}, autoStart: false });
   await m.tick();
   const armed = await m.toggleArmed();
   assert.equal(armed, false);
@@ -88,7 +88,7 @@ test("tracked balance: set anchor, decrements with usage, alerts when low", asyn
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
   await m.tick(); flint.advance();
   const set = await m.setBalance(10.2);
   assert.equal(set.eur, 10.2);
@@ -107,7 +107,8 @@ test("setBalance rejects garbage", async () => {
   const script = [
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
   ];
-  const m = startLteMonitor({ flint: fakeFlint(script), send: async () => {}, autoStart: false });
+  const f = fakeFlint(script);
+  const m = startLteMonitor({ flint: f, spitz: f, send: async () => {}, autoStart: false });
   await assert.rejects(() => m.setBalance(NaN), /invalid balance/);
   await assert.rejects(() => m.setBalance(-5), /invalid balance/);
 });
@@ -117,7 +118,7 @@ test("guard open without timer is relocked on next tick (startup/external)", asy
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "open" },
   ];
   const flint = fakeFlint(script);
-  const m = startLteMonitor({ flint, send: async () => {}, autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async () => {}, autoStart: false });
   await m.tick();
   assert.equal(script[0].guard, "locked");
   assert.equal((await m.getStatus()).guard.state, "locked");
@@ -129,7 +130,7 @@ test("toggleGuard opens with expiry, second toggle relocks", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
   await m.tick();
   const g = await m.toggleGuard();
   assert.equal(g.state, "open");
@@ -148,7 +149,7 @@ test("guard relock messages carry their own tiers", async () => {
   ];
   const flint = fakeFlint(script);
   const sent = [];
-  const m = startLteMonitor({ flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
 
   await m.tick();
   const startup = sent.find((s) => /re-locked on startup/.test(s.msg));
@@ -163,6 +164,24 @@ test("guard relock messages carry their own tiers", async () => {
   assert.equal(external.tier, Tier.WARN);
 });
 
+test("an unreachable Spitz neither breaks the tick nor invents usage", async () => {
+  // A dead Spitz is exactly the failure this monitor exists to report, so a
+  // null counter must not take the tick down with it, and must not be metered
+  // as if it were traffic.
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0 },
+  ];
+  const flint = fakeFlint(script);
+  const m = startLteMonitor({
+    flint, spitz: { readCellularCounters: async () => null },
+    send: async () => {}, autoStart: false,
+  });
+  await m.tick();
+  const before = (await m.getStatus()).totals.total.bytes;
+  await m.tick();
+  assert.equal((await m.getStatus()).totals.total.bytes, before, "null counter adds no usage");
+});
+
 test("drill result tiers: OK is muted, failure warns", async () => {
   const script = [
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "locked" },
@@ -173,8 +192,9 @@ test("drill result tiers: OK is muted, failure warns", async () => {
   // years keep both drills due regardless of what is in there, and the two
   // distinct months keep the second drill due after the first one persists.
   const okSent = [];
+  const okFlint = fakeFlint(script);
   const okMonitor = startLteMonitor({
-    flint: fakeFlint(script), autoStart: false,
+    flint: okFlint, spitz: okFlint, autoStart: false,
     nowIso: () => "2099-01-01T03:00:00.000Z",
     send: async (msg, color, tier) => okSent.push({ msg, color, tier }),
   });
@@ -187,7 +207,7 @@ test("drill result tiers: OK is muted, failure warns", async () => {
   const failFlint = fakeFlint(script);
   failFlint.runDrill = async () => { throw new Error("no route to host"); };
   const failMonitor = startLteMonitor({
-    flint: failFlint, autoStart: false,
+    flint: failFlint, spitz: failFlint, autoStart: false,
     nowIso: () => "2099-02-01T03:00:00.000Z",
     send: async (msg, color, tier) => failSent.push({ msg, color, tier }),
   });

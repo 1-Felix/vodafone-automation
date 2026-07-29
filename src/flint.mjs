@@ -13,12 +13,6 @@ export function parseIfaceStatus(jsonStr) {
   return { up: !!j.up, autostart: !!j.autostart, device: j.l3_device ?? j.device ?? null };
 }
 
-export function parseCountersTotal(out) {
-  const [rx, tx] = out.trim().split("\n").map((l) => parseInt(l, 10));
-  if (!Number.isFinite(rx) || !Number.isFinite(tx)) return null;
-  return rx + tx;
-}
-
 export function flintSsh(command) {
   const args = [
     "-i", KEY,
@@ -38,13 +32,6 @@ export function flintSsh(command) {
 
 export async function getIfaceStatus(iface) {
   return parseIfaceStatus(await flintSsh(`ubus call network.interface.${iface} status`));
-}
-
-export async function readCountersTotal() {
-  const out = await flintSsh(
-    `cat /sys/class/net/${LTE_DEVICE}/statistics/rx_bytes /sys/class/net/${LTE_DEVICE}/statistics/tx_bytes 2>/dev/null || echo ERR`,
-  );
-  return parseCountersTotal(out);
 }
 
 export async function setLteArmed(up) {

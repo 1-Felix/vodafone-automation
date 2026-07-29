@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { log } from "./log.mjs";
 import { notify, Color, Tier } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
+import * as realSpitz from "./spitz.mjs";
 import {
   aggregateUsage, computeBalance, costEur, deltaBytes, deriveConnState, deriveLteAlerts,
   fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldSendRunningUpdate,
@@ -34,6 +35,7 @@ function loadJsonl(file) {
 
 export function startLteMonitor(deps = {}) {
   const flint = deps.flint ?? realFlint;
+  const spitz = deps.spitz ?? realSpitz;
   const send = deps.send ?? notify;
   const autoStart = deps.autoStart ?? true;
   const nowIso = deps.nowIso ?? (() => new Date().toISOString());
@@ -72,7 +74,7 @@ export function startLteMonitor(deps = {}) {
     ]);
     const armed = !!lte.autostart;
 
-    const counter = await flint.readCountersTotal();
+    const counter = await spitz.readCellularCounters();
     const delta = counter === null ? 0 : deltaBytes(lastCounter, counter);
     if (counter !== null) lastCounter = counter;
     if (delta > 0) {
