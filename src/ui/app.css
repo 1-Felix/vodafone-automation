@@ -158,14 +158,17 @@ body {
 }
 .fill { bottom: 0; height: 0; background: var(--link); }
 
-/* Reserve line: below this the collector calls the balance low and alerts. */
+/* Low line: below this the collector calls the balance low and alerts. (The
+   reserve floor that kills the modem is far lower and not drawn.) */
 .low-mark {
   position: absolute;
-  left: -3px;
-  right: -3px;
+  left: -4px;
+  right: -4px;
   height: 0;
-  border-top: 1px dashed var(--sig);
-  opacity: .75;
+  border-top: 2px dashed var(--sig);
+  /* Has to stay legible over the bright fill as well as the empty column, so:
+     full opacity plus a dark halo instead of a hairline at 75 %. */
+  filter: drop-shadow(0 0 1px var(--vault)) drop-shadow(0 0 1px var(--vault));
 }
 .ghost { bottom: 0; height: 0; background: repeating-linear-gradient(-45deg, rgba(255,160,51,.32) 0 3px, transparent 3px 6px); }
 

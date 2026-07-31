@@ -91,16 +91,16 @@ test("tracked balance: set anchor, decrements with usage, alerts when low", asyn
   const sent = [];
   const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
   await m.tick(); flint.advance();
-  const set = await m.setBalance(10.2);
-  assert.equal(set.eur, 10.2);
+  const set = await m.setBalance(3.2);
+  assert.equal(set.eur, 3.2);
   await new Promise((r) => setTimeout(r, 5)); // usage ts must sort after anchor ts
   flint.advance();                 // +10 MB during failover → 0.30 €
   await m.tick();
   const status = await m.getStatus();
-  assert.equal(status.balance.eur, 9.9);
+  assert.equal(status.balance.eur, 2.9);
   assert.equal(status.balance.low, true);
-  assert.equal(status.balance.anchorEur, 10.2);
-  assert.equal(status.balance.lowEur, BALANCE_LOW_EUR); // dashboard draws the reserve line from this
+  assert.equal(status.balance.anchorEur, 3.2);
+  assert.equal(status.balance.lowEur, BALANCE_LOW_EUR); // dashboard draws the low line from this
   assert.ok(sent.some((s) => /balance low/i.test(s.msg)));
 });
 

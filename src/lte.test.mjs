@@ -142,19 +142,20 @@ import { BALANCE_ALERT_REPEAT_MS } from "./lte.mjs";
 const STEADY = { connState: "CABLE_OK", armed: true, backupOk: true, closedSession: null };
 
 test("low balance alerts once, repeats after 24 h while low", () => {
-  const a = deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 8.5 }, NOW);
+  const a = deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 2.5 }, NOW);
   assert.equal(a.alerts.length, 1);
-  assert.match(a.alerts[0].message, /8\.50 €/);
+  assert.match(a.alerts[0].message, /2\.50 €/);
   assert.equal(a.alerts[0].color, Color.YELLOW);
   assert.equal(a.alerts[0].tier, Tier.WARN);
-  const b = deriveLteAlerts(a.state, { ...STEADY, balanceEur: 8.4 }, NOW + 60_000);
+  const b = deriveLteAlerts(a.state, { ...STEADY, balanceEur: 2.4 }, NOW + 60_000);
   assert.equal(b.alerts.length, 0);
-  const c = deriveLteAlerts(b.state, { ...STEADY, balanceEur: 8.4 }, NOW + BALANCE_ALERT_REPEAT_MS + 1);
+  const c = deriveLteAlerts(b.state, { ...STEADY, balanceEur: 2.4 }, NOW + BALANCE_ALERT_REPEAT_MS + 1);
   assert.equal(c.alerts.length, 1);
 });
 
 test("healthy balance and null balance never alert", () => {
-  assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 15 }, NOW).alerts.length, 0);
+  // A fresh 5 € top-up sits above the threshold — it must not warn on arrival.
+  assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: 5 }, NOW).alerts.length, 0);
   assert.equal(deriveLteAlerts({ ...STEADY }, { ...STEADY, balanceEur: null }, NOW).alerts.length, 0);
 });
 

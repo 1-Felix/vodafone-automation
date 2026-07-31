@@ -82,15 +82,18 @@ function renderGauge(bal) {
     return;
   }
 
-  // The scale has to reach the reserve line too, or a high threshold would sit
-  // off the top of the column.
-  const top = Math.max(bal.anchorEur, bal.eur, bal.lowEur ?? 0, 10);
+  // The scale has to reach the low line too, or a high threshold would sit off
+  // the top of the column. Beyond that it follows the money actually in play:
+  // top-ups are ~5 €, and a fresh one has to read as a full column instead of a
+  // third of a fixed 15 € scale.
+  const top = Math.max(bal.anchorEur, bal.eur, bal.lowEur ?? 0, 1);
+  const step = top <= 6 ? 1 : top <= 12 ? 2 : top <= 30 ? 5 : 10;
   // Headroom when the highest reference lands exactly on a step, or it would
-  // sit on the rim — which is precisely the low-balance case, where the reserve
-  // line has to stay readable as a line rather than a border.
-  let ceiling = Math.ceil(top / 5) * 5;
-  if (ceiling === top) ceiling += 5;
-  const step = ceiling > 30 ? 10 : 5;
+  // sit on the rim. That reference is the anchor right after a top-up and the
+  // low line once the credit has fallen under it — both have to stay readable
+  // as lines rather than as the border.
+  let ceiling = Math.ceil(top / step) * step;
+  if (ceiling === top) ceiling += step;
   const pct = (v) => Math.max(0, Math.min(100, (v / ceiling) * 100));
   const spent = Math.max(0, bal.anchorEur - bal.eur);
 

@@ -125,9 +125,11 @@ member `secondwan`):
   keep the prepaid SIM active (≈ 6 ct/month).
 - CallYa balance on the dashboard: tracked locally — sync the real balance once
   (dashboard input; check via MeinVodafone or `*100#` on a phone), then the
-  collector decrements it by every metered LTE byte. Discord alert below €10
-  (`BALANCE_LOW_EUR`, also drawn as the dashed reserve line on the gauge and
-  returned as `balance.lowEur`). (USSD from the Spitz itself is impossible: the EG120K
+  collector decrements it by every metered LTE byte. Discord alert below €3
+  (`BALANCE_LOW_EUR`, also drawn as the dashed low line on the gauge and
+  returned as `balance.lowEur`). The gauge scales itself to the credit in play —
+  a ~5 € top-up fills the column instead of being a sliver of a fixed 15 € scale.
+  (USSD from the Spitz itself is impossible: the EG120K
   modem is LTE-only without IMS, so the network times out on `*100#`.)
 - Balance reserve floor (`BALANCE_RESERVE_EUR`, default 0.50 €): when the tracked
   balance reaches the floor with the cable healthy, the monitor auto-disarms the

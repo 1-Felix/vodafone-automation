@@ -45,7 +45,11 @@ export function isDrillDue(lastDrillTs, nowIso) {
   return (lastDrillTs ?? "").slice(0, 7) < nowIso.slice(0, 7);
 }
 
-export const BALANCE_LOW_EUR = parseFloat(process.env.BALANCE_LOW_EUR ?? "10");
+// Warn threshold for the tracked balance. Below the ~5 € top-ups actually in
+// use, so a fresh top-up never reads as low on arrival, and still far enough
+// above the reserve floor to leave ~2.50 € (≈ 80 MB) of runway before the
+// kill switch trips.
+export const BALANCE_LOW_EUR = parseFloat(process.env.BALANCE_LOW_EUR ?? "3");
 export const BALANCE_ALERT_REPEAT_MS = 24 * 60 * 60_000;
 
 // Tracked balance: last manual anchor minus metered usage since then.
