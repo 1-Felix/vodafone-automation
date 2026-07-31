@@ -88,12 +88,13 @@ function renderGauge(bal) {
   // third of a fixed 15 € scale.
   const top = Math.max(bal.anchorEur, bal.eur, bal.lowEur ?? 0, 1);
   const step = top <= 6 ? 1 : top <= 12 ? 2 : top <= 30 ? 5 : 10;
-  // Headroom when the highest reference lands exactly on a step, or it would
-  // sit on the rim. That reference is the anchor right after a top-up and the
-  // low line once the credit has fallen under it — both have to stay readable
-  // as lines rather than as the border.
+  // Always keep a slice of empty column above the highest reference, so it
+  // reads as a line rather than as the rim. That reference is the anchor right
+  // after a top-up and the low line once the credit has fallen under it. Keyed
+  // off a fraction rather than an exact step hit, or 4,97 € would fill a 5 €
+  // scale to the brim while 5,00 € sat at 83 % of a 6 € one.
   let ceiling = Math.ceil(top / step) * step;
-  if (ceiling === top) ceiling += step;
+  if (top > ceiling * 0.92) ceiling += step;
   const pct = (v) => Math.max(0, Math.min(100, (v / ceiling) * 100));
   const spent = Math.max(0, bal.anchorEur - bal.eur);
 
