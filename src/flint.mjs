@@ -61,11 +61,14 @@ export function parseGuardState(out) {
   return "missing"; // chain exists but is empty/partial — not guarding
 }
 
+// Trailing `true`: when the chain is absent the `grep -q` fails and, without it,
+// ssh would exit 1 and the whole tick would throw — hiding the very "missing"
+// state the alert logic exists to report.
+export const GUARD_STATE_CMD =
+  "iptables -S lte_guard 2>/dev/null; iptables -S forwarding_rule 2>/dev/null | grep -q lte_guard && echo HOOKED; true";
+
 export async function getGuardState() {
-  const out = await flintSsh(
-    "iptables -S lte_guard 2>/dev/null; iptables -S forwarding_rule 2>/dev/null | grep -q lte_guard && echo HOOKED",
-  );
-  return parseGuardState(out);
+  return parseGuardState(await flintSsh(GUARD_STATE_CMD));
 }
 
 export async function openGuard() {
