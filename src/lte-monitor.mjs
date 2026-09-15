@@ -5,7 +5,7 @@ import { notify, Color, Tier } from "./notify.mjs";
 import * as realFlint from "./flint.mjs";
 import * as realSpitz from "./spitz.mjs";
 import {
-  aggregateUsage, backgroundBytes, computeBalance, costEur, deltaBytes, deriveConnState,
+  aggregateUsage, assessReadiness, backgroundBytes, computeBalance, costEur, deltaBytes, deriveConnState,
   deriveLteAlerts, fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldAutoDisarm,
   shouldSendRunningUpdate, BALANCE_LOW_EUR, BALANCE_RESERVE_EUR, LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
@@ -192,6 +192,7 @@ export function startLteMonitor(deps = {}) {
       if (armed) {
         try {
           const r = await flint.runDrill();
+          persisted.lastDrill = { ts, ok: r.ok, bytes: r.bytes, seconds: r.seconds };
           const mbit = r.seconds > 0 ? ((r.bytes * 8) / r.seconds / 1e6).toFixed(0) : "?";
           await send(
             r.ok
@@ -201,8 +202,10 @@ export function startLteMonitor(deps = {}) {
             r.ok ? Tier.LOG : Tier.WARN,
           );
         } catch (err) {
+          persisted.lastDrill = { ts, ok: false, bytes: 0, seconds: 0 };
           await send(`Monthly LTE drill **FAILED**: ${err.message}`, Color.RED, Tier.WARN);
         }
+        writeFileSync(STATE_FILE, JSON.stringify(persisted));
       } else {
         await send("Monthly LTE drill skipped — fallback is disarmed.", Color.YELLOW, Tier.WARN);
       }
@@ -226,10 +229,23 @@ export function startLteMonitor(deps = {}) {
 
   async function getStatus() {
     const balanceEur = anchor ? computeBalance(anchor, usage) : null;
+    const readiness = assessReadiness({
+      connState: alertState.connState,
+      armed: alertState.armed,
+      backupOk,
+      guardState,
+      balanceEur,
+      drill: persisted.lastDrill,
+      updatedAt: lastTickTs,
+      nowMs: Date.parse(nowIso()),
+    });
     return {
+      readiness,
       connState: alertState.connState ?? null,
       armed: alertState.armed ?? null,
       backupOk: backupOk ?? null,
+      backupCheckedAt: lastHealthAt ? new Date(lastHealthAt).toISOString() : null,
+      drill: persisted.lastDrill ?? null,
       session: session ? { ...session, costEur: costEur(session.bytes) } : null,
       totals: aggregateUsage(usage, new Date().toISOString()),
       history: sessions.slice(-20).reverse(),
@@ -239,6 +255,7 @@ export function startLteMonitor(deps = {}) {
         anchorTs: anchor.ts,
         low: balanceEur < BALANCE_LOW_EUR,
         lowEur: BALANCE_LOW_EUR,
+        reserveEur: BALANCE_RESERVE_EUR,
       } : null,
       guard: {
         state: guardState,

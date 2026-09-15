@@ -271,3 +271,73 @@ test("computeBalance: null without anchor, floors at 0", () => {
   assert.equal(computeBalance({ ts: "2026-07-27T10:00:00.000Z", eur: 0.05 },
     [{ ts: "2026-07-27T11:00:00.000Z", bytes: 900_000_000 }]), 0);
 });
+
+import { assessReadiness, BALANCE_LOW_EUR } from "./lte.mjs";
+
+const T0 = Date.parse("2026-09-15T12:00:00.000Z");
+const READY = {
+  connState: "CABLE_OK", armed: true, backupOk: true, guardState: "locked",
+  balanceEur: 4.2, drill: { ts: "2026-09-01T03:00:00.000Z", ok: true },
+  updatedAt: "2026-09-15T11:59:40.000Z", nowMs: T0,
+};
+const ago = (min) => new Date(T0 - min * 60_000).toISOString();
+
+test("assessReadiness: every check green on a fresh tick is protected", () => {
+  assert.deepEqual(assessReadiness(READY), {
+    verdict: "protected",
+    checks: { armed: "ok", backup: "ok", guard: "ok", credit: "ok", drill: "ok" },
+  });
+});
+
+test("assessReadiness: a frozen tick is stale whatever it last saw", () => {
+  assert.equal(assessReadiness({ ...READY, updatedAt: ago(13 * 24 * 60) }).verdict, "stale");
+  assert.equal(assessReadiness({ ...READY, updatedAt: null }).verdict, "stale");
+  // Cable ticks every 10 min, so 20 min is late but not yet stuck.
+  assert.equal(assessReadiness({ ...READY, updatedAt: ago(20) }).verdict, "protected");
+  assert.equal(assessReadiness({ ...READY, updatedAt: ago(26) }).verdict, "stale");
+  // On LTE it ticks every minute, so the bar drops with it.
+  const lte = { ...READY, connState: "LTE_ACTIVE" };
+  assert.equal(assessReadiness({ ...lte, updatedAt: ago(6) }).verdict, "backup");
+  assert.equal(assessReadiness({ ...lte, updatedAt: ago(8) }).verdict, "stale");
+});
+
+test("assessReadiness: link states override the checklist", () => {
+  assert.equal(assessReadiness({ ...READY, connState: "LTE_ACTIVE", balanceEur: 1 }).verdict, "backup");
+  assert.equal(assessReadiness({ ...READY, connState: "ALL_DOWN", backupOk: false }).verdict, "offline");
+});
+
+test("assessReadiness: a broken part leaves the cable unprotected", () => {
+  const disarmed = assessReadiness({ ...READY, armed: false });
+  assert.equal(disarmed.verdict, "unprotected");
+  assert.equal(disarmed.checks.armed, "fail");
+  assert.equal(disarmed.checks.backup, "unknown", "backupOk is not refreshed while disarmed");
+  assert.equal(assessReadiness({ ...READY, backupOk: false }).checks.backup, "fail");
+  assert.equal(assessReadiness({ ...READY, backupOk: false }).verdict, "unprotected");
+  assert.equal(assessReadiness({ ...READY, guardState: "missing" }).checks.guard, "fail");
+  assert.equal(assessReadiness({ ...READY, guardState: "missing" }).verdict, "unprotected");
+  const floor = assessReadiness({ ...READY, balanceEur: BALANCE_RESERVE_EUR });
+  assert.equal(floor.checks.credit, "fail");
+  assert.equal(floor.verdict, "unprotected");
+});
+
+test("assessReadiness: spending states and unconfirmed parts put it at risk", () => {
+  const cases = [
+    [{ guardState: "open" }, "guard", "warn"],
+    [{ balanceEur: BALANCE_LOW_EUR - 0.01 }, "credit", "warn"],
+    [{ balanceEur: null }, "credit", "unknown"],
+    [{ backupOk: null }, "backup", "unknown"],
+    [{ guardState: null }, "guard", "unknown"],
+    [{ drill: { ts: "2026-09-01T03:00:00.000Z", ok: false } }, "drill", "warn"],
+  ];
+  for (const [patch, key, state] of cases) {
+    const r = assessReadiness({ ...READY, ...patch });
+    assert.equal(r.checks[key], state, JSON.stringify(patch));
+    assert.equal(r.verdict, "at-risk", JSON.stringify(patch));
+  }
+});
+
+test("assessReadiness: a drill that never ran is unknown but does not flag the verdict", () => {
+  const r = assessReadiness({ ...READY, drill: null });
+  assert.equal(r.checks.drill, "unknown");
+  assert.equal(r.verdict, "protected");
+});

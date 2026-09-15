@@ -7,7 +7,7 @@ import { join } from "node:path";
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "lte-test-"));
 process.env.LTE_LINK_GRACE_MS = "0";
 const { startLteMonitor } = await import("./lte-monitor.mjs");
-const { BALANCE_LOW_EUR } = await import("./lte.mjs");
+const { BALANCE_LOW_EUR, BALANCE_RESERVE_EUR } = await import("./lte.mjs");
 const { Tier } = await import("./notify.mjs");
 
 function fakeFlint(script) {
@@ -284,4 +284,48 @@ test("drill result tiers: OK is muted, failure warns", async () => {
   const failed = failSent.find((s) => /drill \*\*FAILED\*\*/.test(s.msg));
   assert.ok(failed, "drill failure announced");
   assert.equal(failed.tier, Tier.WARN);
+  assert.equal((await failMonitor.getStatus()).drill.ok, false, "a throwing drill is recorded as failed");
+});
+
+// Last in the file on purpose: the drills below persist 2099-03/04 into the
+// shared state file, which would make the 2099-01/02 drills above not due.
+test("status carries readiness, the last health ping and the persisted drill result", async () => {
+  const script = [
+    { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 0, guard: "locked" },
+  ];
+  const flint = fakeFlint(script);
+  const m = startLteMonitor({
+    flint, spitz: flint, send: async () => {}, autoStart: false,
+    nowIso: () => "2099-03-01T03:00:00.000Z",
+  });
+
+  const before = await m.getStatus();
+  assert.equal(before.readiness.verdict, "stale", "nothing sampled yet proves nothing");
+  assert.equal(before.backupCheckedAt, null);
+
+  await m.setBalance(4); // ticks
+  const s = await m.getStatus();
+  assert.deepEqual(s.readiness, {
+    verdict: "protected",
+    checks: { armed: "ok", backup: "ok", guard: "ok", credit: "ok", drill: "ok" },
+  });
+  assert.ok(Number.isFinite(Date.parse(s.backupCheckedAt)), "health ping time is reported");
+  assert.deepEqual(s.drill, { ts: "2099-03-01T03:00:00.000Z", ok: true, bytes: 2_000_000, seconds: 1.5 });
+  assert.equal(s.balance.reserveEur, BALANCE_RESERVE_EUR);
+
+  const failFlint = fakeFlint(script);
+  failFlint.runDrill = async () => ({ ok: false, bytes: 0, seconds: 120 });
+  const f = startLteMonitor({
+    flint: failFlint, spitz: failFlint, send: async () => {}, autoStart: false,
+    nowIso: () => "2099-04-01T03:00:00.000Z",
+  });
+  await f.tick();
+  assert.equal((await f.getStatus()).readiness.checks.drill, "warn");
+
+  const restarted = startLteMonitor({
+    flint: failFlint, spitz: failFlint, send: async () => {}, autoStart: false,
+    nowIso: () => "2099-04-01T04:00:00.000Z",
+  });
+  assert.deepEqual((await restarted.getStatus()).drill,
+    { ts: "2099-04-01T03:00:00.000Z", ok: false, bytes: 0, seconds: 120 }, "survives a restart");
 });

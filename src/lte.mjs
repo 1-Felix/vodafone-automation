@@ -226,3 +226,40 @@ export function deriveLteAlerts(state, curr, now) {
   next.backupOk = curr.backupOk;
   return { alerts, state: next };
 }
+
+// Readiness: can the fallback actually carry a cable outage right now? The link
+// state alone cannot say that — "cable up" reads the same with a dead Spitz, a
+// missing guard or a monitor that stopped ticking two weeks ago.
+//
+// A tick that has not landed within two sample intervals plus slack means the
+// monitor is stuck, and what it last reported is no longer evidence.
+export function staleAfterMs(connState) {
+  return 2 * nextSampleDelayMs(connState) + 5 * 60_000;
+}
+
+export function assessReadiness({ connState, armed, backupOk, guardState, balanceEur, drill, updatedAt, nowMs }) {
+  const checks = {
+    armed: armed == null ? "unknown" : armed ? "ok" : "fail",
+    // Not re-checked while disarmed, so whatever it last held proves nothing.
+    backup: armed === false || backupOk == null ? "unknown" : backupOk ? "ok" : "fail",
+    guard: { locked: "ok", open: "warn", missing: "fail" }[guardState] ?? "unknown",
+    credit: typeof balanceEur !== "number" ? "unknown"
+      : balanceEur <= BALANCE_RESERVE_EUR ? "fail"
+      : balanceEur < BALANCE_LOW_EUR ? "warn"
+      : "ok",
+    drill: !drill ? "unknown" : drill.ok ? "ok" : "warn",
+  };
+
+  const age = updatedAt ? nowMs - Date.parse(updatedAt) : Infinity;
+  if (age > staleAfterMs(connState)) return { verdict: "stale", checks };
+  if (connState === "ALL_DOWN") return { verdict: "offline", checks };
+  if (connState === "LTE_ACTIVE") return { verdict: "backup", checks };
+
+  // A drill that has not run yet is no reason for alarm; the health ping
+  // already speaks for the link. Every other unconfirmed part is.
+  const core = [checks.armed, checks.backup, checks.guard, checks.credit];
+  const verdict = core.includes("fail") ? "unprotected"
+    : core.includes("warn") || core.includes("unknown") || checks.drill === "warn" ? "at-risk"
+    : "protected";
+  return { verdict, checks };
+}
