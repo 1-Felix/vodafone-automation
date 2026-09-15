@@ -6,3 +6,6 @@ data/
 
 # generated mirror of the OpenSpec skills/commands tracked under .claude/
 .agents/
+
+# personal Claude Code permissions
+.claude/settings.local.json
