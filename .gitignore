@@ -3,3 +3,6 @@ node_modules/
 
 # collector output
 data/
+
+# generated mirror of the OpenSpec skills/commands tracked under .claude/
+.agents/
