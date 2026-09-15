@@ -112,7 +112,15 @@ member `secondwan`):
 
 - Meters billable LTE bytes from the Flint's `lan5` counters over SSH and prices
   them at 3 ct/MB (`data/lte-usage.jsonl`, `data/lte-sessions.jsonl`).
-- Dashboard on the NUC LAN (`:8799`): link state, a prepaid-credit gauge showing
+- Dashboard on the NUC LAN (`:8799`): a readiness verdict up top — *Protected*,
+  *At risk*, *Unprotected*, *On backup*, *Offline* or *Stale* — that answers
+  "would a cable outage fail over right now?" rather than just "is the cable
+  up?". It comes from `assessReadiness()` (`status.readiness`), which folds the
+  arm state, backup health ping, LTE guard, credit against the low line and
+  reserve floor, and the last monthly drill into one word, and turns *Stale*
+  once no tick has landed for two sample intervals plus 5 min. The same verdict
+  drives the side rail, tab title and favicon; below it a checklist shows each
+  part with its fix button. Also a prepaid-credit gauge showing
   what is left and what this outage has spent, session/day/month/total cost,
   failover history, and an arm/disarm kill switch (armed by default; disarm =
   `ifdown secondwan` on the Flint, resets to armed on reboot). The page lives in

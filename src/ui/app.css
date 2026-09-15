@@ -8,12 +8,15 @@
   --ink-dim: #7f92a3;
   --ink-faint: #566878;
 
-  --link: #3ed9c4;
-  --sig: #ffa033;
-  --alarm: #e60000;
-  --alarm-ink: #ff5c5c;
+  /* Status colours mean one thing each and appear nowhere else on the page:
+     ok = nothing to do, warn = works but costs money or needs you soon,
+     bad = no internet or no safety net, idle = don't trust this. */
+  --ok: #4cc38a;
+  --warn: #f0a531;
+  --bad: #ff5a4f;
+  --idle: #7f92a3;
 
-  --state: var(--ink-faint);
+  --state: var(--idle);
 
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: ui-sans-serif, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
@@ -31,7 +34,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* State rail — the link state, always in peripheral vision. */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* State rail — the verdict, always in peripheral vision. */
 .rail {
   position: fixed;
   inset: 0 auto 0 0;
@@ -41,6 +53,9 @@ body {
   z-index: 2;
 }
 .rail.pulse { animation: breathe 2.2s ease-in-out infinite; }
+.rail.stale {
+  background: repeating-linear-gradient(to bottom, var(--state) 0 6px, transparent 6px 14px);
+}
 @keyframes breathe { 50% { opacity: .25; } }
 
 .page {
@@ -58,7 +73,6 @@ body {
   text-transform: uppercase;
   color: var(--ink-faint);
 }
-.micro.sig { color: var(--sig); }
 
 .n {
   font-family: var(--mono);
@@ -72,9 +86,9 @@ body {
   color: var(--ink-dim);
 }
 
-/* ── Header ─────────────────────────────────────────────── */
+/* ── Header: the verdict ─────────────────────────────────── */
 
-.head { margin-bottom: 2.4rem; }
+.head { margin-bottom: 2rem; }
 
 .eyebrow {
   margin: 0 0 .9rem;
@@ -85,42 +99,84 @@ body {
   color: var(--ink-faint);
 }
 
-.state {
+.verdict {
   margin: 0;
-  font-size: clamp(1.8rem, 7vw, 2.6rem);
+  font-size: clamp(2.2rem, 10vw, 3.4rem);
   font-weight: 800;
-  letter-spacing: .005em;
+  letter-spacing: -.01em;
   text-transform: uppercase;
-  line-height: 1.05;
+  line-height: 1;
   color: var(--state);
   transition: color .5s ease;
 }
 
-.statesub {
+.why {
+  margin: .6rem 0 0;
+  max-width: 34rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.context {
   margin: .5rem 0 0;
-  max-width: 32rem;
-  font-size: .92rem;
+  font-size: .8rem;
   color: var(--ink-dim);
 }
 
-.flags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .4rem;
-  margin: 1.1rem 0 0;
+/* ── Readiness checklist ─────────────────────────────────── */
+
+.checks > .micro { margin-bottom: .6rem; }
+
+.checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line-soft);
 }
 
-.flag {
-  padding: .22rem .6rem;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  font-size: .7rem;
+.chk {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr auto;
+  align-items: center;
+  gap: .3rem .9rem;
+  padding: .8rem .6rem;
+  margin: 0 -.6rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+.chk[data-state="fail"] { background: color-mix(in srgb, var(--bad) 9%, transparent); }
+.chk[data-state="warn"] { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+
+/* Shape carries the state as well as colour: filled for broken, outlined for
+   a warning, dashed for unknown, a bare tick for fine. */
+.mark {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 3px;
+  font: 800 .9rem/1 var(--sans);
+  align-self: start;
+  margin-top: .05rem;
+}
+.chk[data-state="ok"] .mark { color: var(--ok); }
+.chk[data-state="ok"] .mark::before { content: "✓"; }
+.chk[data-state="warn"] .mark { color: var(--warn); border: 1.5px solid var(--warn); }
+.chk[data-state="warn"] .mark::before { content: "!"; }
+.chk[data-state="fail"] .mark { color: var(--vault); background: var(--bad); }
+.chk[data-state="fail"] .mark::before { content: "✕"; }
+.chk[data-state="unknown"] .mark { color: var(--ink-faint); border: 1.5px dashed var(--ink-faint); }
+.chk[data-state="unknown"] .mark::before { content: "?"; }
+
+.chktext { min-width: 0; }
+.chkname {
+  display: block;
+  margin: 0 0 .1rem;
+  font-size: .95rem;
   font-weight: 600;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
 }
-.flag.warn { border-color: var(--sig); color: var(--sig); }
+
+.chk .plate { grid-column: 3; }
 
 /* ── Meter: the depletion gauge ──────────────────────────── */
 
@@ -128,6 +184,7 @@ body {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 1rem 1.5rem;
+  margin-top: 2.2rem;
   padding: var(--gap) var(--gap) 1.2rem;
   border: 1px solid var(--line);
   border-radius: 3px;
@@ -156,7 +213,9 @@ body {
   right: 0;
   transition: height .6s cubic-bezier(.2, .7, .2, 1), bottom .6s cubic-bezier(.2, .7, .2, 1);
 }
-.fill { bottom: 0; height: 0; background: var(--link); }
+/* Money, not status: neutral until it actually runs low. */
+.fill { bottom: 0; height: 0; background: #8a9cad; }
+.ghost { bottom: 0; height: 0; background: repeating-linear-gradient(-45deg, rgba(223, 232, 240, .16) 0 3px, transparent 3px 6px); }
 
 /* Low line: below this the collector calls the balance low and alerts. (The
    reserve floor that kills the modem is far lower and not drawn.) */
@@ -165,14 +224,14 @@ body {
   left: -4px;
   right: -4px;
   height: 0;
-  border-top: 2px dashed var(--sig);
-  /* Has to stay legible over the bright fill as well as the empty column, so:
-     full opacity plus a dark halo instead of a hairline at 75 %. */
+  border-top: 2px dashed var(--ink);
+  /* Has to stay legible over the fill as well as the empty column, so a dark
+     halo instead of a hairline. */
   filter: drop-shadow(0 0 1px var(--vault)) drop-shadow(0 0 1px var(--vault));
 }
-.ghost { bottom: 0; height: 0; background: repeating-linear-gradient(-45deg, rgba(255,160,51,.32) 0 3px, transparent 3px 6px); }
 
-.gauge.low .fill { background: var(--sig); }
+.gauge.low .fill { background: var(--warn); }
+.gauge.floor .fill { background: var(--bad); }
 .gauge.empty .col { border-style: dashed; border-color: var(--line); }
 
 .ticks {
@@ -204,21 +263,15 @@ body {
 .big {
   margin: -.5rem 0 0;
   font-family: var(--sans);
-  font-size: clamp(2.1rem, 9vw, 2.9rem);
+  font-size: clamp(1.9rem, 8vw, 2.4rem);
   font-weight: 800;
   letter-spacing: -.025em;
   line-height: 1;
 }
-.gauge.low + .readout .big { color: var(--sig); }
+.gauge.low + .readout .big { color: var(--warn); }
+.gauge.floor + .readout .big { color: var(--bad); }
 
 .readout .cap { margin-top: .45rem; }
-
-.session {
-  margin-top: 1.2rem;
-  padding-left: .7rem;
-  border-left: 2px solid var(--sig);
-}
-.session .n { margin: .2rem 0 0; font-size: .95rem; }
 
 .totals {
   grid-column: 1 / -1;
@@ -239,47 +292,40 @@ body {
 }
 .tot dd .cost { color: var(--ink-dim); }
 
-/* ── Controls ────────────────────────────────────────────── */
-
-.controls { margin-top: 1.6rem; }
-.controls > .micro { margin-bottom: .7rem; }
-
-.ctl {
+.sync {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: .9rem;
-  padding: .95rem 0;
-  border-bottom: 1px solid var(--line-soft);
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line-soft);
 }
-.controls > .micro + .ctl { border-top: 1px solid var(--line-soft); }
+.synctext { flex: 1 1 15rem; }
 
-.ctltext { flex: 1 1 15rem; }
-.ctlname {
-  display: block;
-  margin: 0 0 .2rem;
-  font-size: .95rem;
-  font-weight: 600;
-}
+/* ── Buttons & fields ────────────────────────────────────── */
 
 .plate {
   flex: 0 0 auto;
   padding: .5rem 1rem;
   border: 1px solid var(--line);
-  border-left: 2px solid var(--ink-faint);
   border-radius: 2px;
   background: transparent;
   color: var(--ink);
   font: 600 .82rem/1 var(--sans);
   letter-spacing: .02em;
+  white-space: nowrap;
   cursor: pointer;
   transition: border-color .15s ease, background .15s ease, color .15s ease;
 }
 .plate:hover:not(:disabled) { background: rgba(255, 255, 255, .04); border-color: var(--ink-faint); }
-.plate:disabled { opacity: .45; cursor: progress; }
-.plate.costly { border-left-color: var(--sig); color: var(--sig); }
-.plate.costly:hover:not(:disabled) { border-color: var(--sig); }
+.plate:disabled { opacity: .45; cursor: default; }
+.plate[aria-busy="true"] { cursor: progress; }
+/* The fix for a broken check: the one solid button on the page, and only
+   while something needs it. */
+.plate.fix { background: var(--ink); border-color: var(--ink); color: var(--vault); }
+.plate.fix:hover:not(:disabled) { background: #f4f8fb; border-color: #f4f8fb; }
 
 .field { display: flex; gap: .5rem; }
 #balin {
@@ -295,7 +341,7 @@ body {
 #balin::placeholder { color: var(--ink-faint); }
 
 :focus-visible {
-  outline: 2px solid var(--sig);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -332,8 +378,15 @@ td:first-child { color: var(--ink); }
 .r { text-align: right; padding-left: 1rem; }
 th:last-child, td:last-child { padding-right: 0; }
 
-.foot { margin-top: 2rem; }
-.foot .lost { color: var(--alarm-ink); }
+/* ── Stale: everything below the verdict is history ──────── */
+
+.page.stale .checks,
+.page.stale .meter,
+.page.stale .log {
+  opacity: .5;
+  filter: grayscale(1);
+  transition: opacity .3s ease;
+}
 
 @media (max-width: 30rem) {
   .col, .ticks { height: 140px; }
@@ -343,8 +396,11 @@ th:last-child, td:last-child { padding-right: 0; }
   .tot { display: flex; justify-content: space-between; align-items: baseline; }
   .tot dt { margin-bottom: 0; }
   .tot dd { flex-direction: row; gap: .7rem; }
+  /* The button drops under the text instead of squeezing it into a column. */
+  .chk { grid-template-columns: 1.5rem 1fr; }
+  .chk .plate { grid-column: 2; justify-self: start; margin-top: .35rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, .fill, .ghost, .rail, .state { transition: none !important; animation: none !important; }
+  *, .fill, .ghost, .rail, .verdict { transition: none !important; animation: none !important; }
 }

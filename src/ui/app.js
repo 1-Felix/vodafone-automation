@@ -4,24 +4,6 @@ const EUR = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" 
 const DEC1 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
 const DEC2 = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const STATES = {
-  CABLE_OK: {
-    color: "var(--link)",
-    title: "Cable up",
-    sub: "LTE is on standby. Nothing is being metered.",
-  },
-  LTE_ACTIVE: {
-    color: "var(--alarm)",
-    title: "LTE active",
-    sub: "The cable is down. Every megabyte comes off the CallYa balance.",
-  },
-  ALL_DOWN: {
-    color: "var(--alarm)",
-    title: "All down",
-    sub: "Neither the cable nor the LTE stick is carrying traffic.",
-  },
-};
-
 const eur = (v) => (Number.isFinite(v) ? EUR.format(v) : "–");
 
 // Units are glued to their number with a non-breaking space so a narrow screen
@@ -45,33 +27,202 @@ const stamp = (ts) =>
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 
-function renderState(s) {
-  const view = STATES[s.connState] ?? {
-    color: "var(--ink-faint)",
-    title: "No data",
-    sub: "The collector has not reported a link state yet.",
-  };
-  document.documentElement.style.setProperty("--state", view.color);
-  $("state").textContent = view.title;
-  $("statesub").textContent = view.sub;
-  $("rail").classList.toggle("pulse", s.connState === "ALL_DOWN");
-
-  const armed = $("armed");
-  armed.textContent = s.armed ? "fallback armed" : "fallback disarmed";
-  armed.classList.toggle("warn", s.armed === false);
-
-  const backup = $("backup");
-  backup.textContent = s.backupOk === false ? "backup unreachable" : "backup reachable";
-  backup.classList.toggle("warn", s.backupOk === false);
+// Coarse age for "checked … ago" and staleness; days once hours stop helping.
+function span(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + " s";
+  const m = Math.round(s / 60);
+  if (m < 60) return m + " min";
+  const h = Math.round(m / 60);
+  return h < 48 ? h + " h" : Math.round(h / 24) + " days";
 }
 
-function renderGauge(bal) {
+const ago = (t) => span(Date.now() - new Date(t).getTime()) + " ago";
+
+// Each verdict owns exactly one status colour; the rail, headline, tab title
+// and favicon all follow it.
+const VERDICTS = {
+  protected: { token: "--ok", title: "Protected" },
+  "at-risk": { token: "--warn", title: "At risk" },
+  unprotected: { token: "--bad", title: "Unprotected" },
+  backup: { token: "--warn", title: "On backup" },
+  offline: { token: "--bad", title: "Offline" },
+  stale: { token: "--idle", title: "Stale" },
+};
+
+const STATE_WORD = { ok: "fine", warn: "needs attention", fail: "broken", unknown: "unknown" };
+
+let favicon = "";
+
+function paint(token, title, why, { pulse = false, stale = false } = {}) {
+  const root = document.documentElement;
+  root.style.setProperty("--state", `var(${token})`);
+  $("verdict").textContent = title;
+  $("why").textContent = why;
+  $("rail").classList.toggle("pulse", pulse);
+  $("rail").classList.toggle("stale", stale);
+  $("page").classList.toggle("stale", stale);
+  document.title = `${title} · LTE failover`;
+
+  // A pinned tab should answer the question without being opened. Only swap
+  // the icon on change, or some browsers flicker it on every refresh.
+  const color = getComputedStyle(root).getPropertyValue(token).trim();
+  const dot = stale
+    ? `<circle cx='8' cy='8' r='4.5' fill='none' stroke='${color}' stroke-width='1.5'/>`
+    : `<circle cx='8' cy='8' r='5.5' fill='${color}'/>`;
+  const href = "data:image/svg+xml," + encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='#0b1015'/>${dot}</svg>`,
+  );
+  if (href !== favicon) $("favicon").href = favicon = href;
+}
+
+// Everything keeping the verdict off "protected", worst first.
+function problems(s) {
+  const { checks } = s.readiness;
+  const bal = s.balance;
+  const out = [];
+  if (checks.armed === "fail") {
+    out.push(checks.credit === "fail"
+      ? "Auto-disarmed at the reserve floor. Top up, sync the balance, then arm it again."
+      : "The fallback is disarmed. A cable outage will not fail over.");
+  }
+  if (checks.backup === "fail") out.push("The backup link is unreachable. A cable outage would leave you offline.");
+  if (checks.guard === "fail") out.push("The LTE guard is missing. A failover would let every device spend credit.");
+  if (checks.credit === "fail" && checks.armed !== "fail") {
+    out.push(`Credit is at the ${eur(bal.reserveEur)} reserve floor. LTE is about to be disarmed.`);
+  }
+  if (checks.guard === "warn") {
+    out.push(s.guard.openUntil
+      ? `The LTE guard is open until ${clock(s.guard.openUntil)}. Every device can spend credit.`
+      : "The LTE guard is open. Every device can spend credit.");
+  }
+  if (checks.credit === "warn") out.push(`Credit is low at ${eur(bal.eur)}. Top up soon.`);
+  if (checks.drill === "warn") out.push("The last monthly drill failed. Check the Spitz and its SIM.");
+  if (checks.credit === "unknown") out.push("Credit isn't synced, so the reserve floor can't guard it.");
+  if (checks.armed === "unknown" || checks.guard === "unknown") out.push("Part of the fallback hasn't been read yet.");
+  if (checks.backup === "unknown" && checks.armed === "ok") out.push("The backup link hasn't been confirmed yet.");
+  return out;
+}
+
+function renderVerdict(s) {
+  const { verdict } = s.readiness;
+  const view = VERDICTS[verdict] ?? VERDICTS.stale;
+  let title = view.title;
+  let why;
+
+  if (verdict === "stale") {
+    if (s.updatedAt) {
+      why = `No sample for ${span(Date.now() - Date.parse(s.updatedAt))}. The monitor has stopped ticking, so everything below is from ${stamp(s.updatedAt)}.`;
+    } else {
+      title = "No data";
+      why = "The monitor has not finished its first sample yet.";
+    }
+  } else if (verdict === "offline") {
+    why = "Neither the cable nor LTE is carrying traffic.";
+  } else if (verdict === "backup") {
+    why = "The cable is down. LTE is carrying traffic, and every megabyte comes off the CallYa balance.";
+  } else if (verdict === "protected") {
+    why = "A cable outage fails over to LTE on its own.";
+  } else {
+    const list = problems(s);
+    why = list[0] + (list.length > 1 ? ` (+${list.length - 1} more below)` : "");
+  }
+
+  paint(view.token, title, why, { pulse: verdict === "offline", stale: verdict === "stale" });
+
+  const link = {
+    CABLE_OK: "Cable up · LTE on standby",
+    LTE_ACTIVE: s.session
+      ? `Cable down · on LTE for ${dur(Date.now() - Date.parse(s.session.startTs))} · ${data(s.session.bytes)} · ${eur(s.session.costEur)}`
+      : "Cable down · on LTE",
+    ALL_DOWN: "Cable and LTE both down",
+  }[s.connState];
+  const parts = [];
+  if (link) parts.push(verdict === "stale" ? "Last known: " + link : link);
+  if (s.updatedAt && verdict !== "stale") parts.push("checked " + ago(s.updatedAt));
+  $("context").textContent = parts.join(" · ");
+}
+
+function setCheck(key, state, detail) {
+  const li = $("chk-" + key);
+  li.dataset.state = state;
+  li.querySelector(".sr").textContent = ": " + STATE_WORD[state];
+  li.querySelector(".detail").textContent = detail;
+}
+
+function setButton(btn, label, { fix = false, disabled = false } = {}) {
+  btn.textContent = label;
+  btn.classList.toggle("fix", fix);
+  // A refresh landing mid-request must not re-enable the button under the click.
+  btn.disabled = disabled || btn.getAttribute("aria-busy") === "true";
+}
+
+function renderChecks(s) {
+  const { checks } = s.readiness;
+  const bal = s.balance;
+  const guard = s.guard ?? {};
+  const drill = s.drill;
+
+  setCheck("armed", checks.armed, {
+    ok: "Armed. LTE takes over on its own when the cable drops.",
+    fail: "Disarmed. A cable outage will not fail over.",
+    unknown: "Not read yet.",
+  }[checks.armed]);
+  setButton($("armbtn"), s.armed ? "Disarm" : "Arm fallback", {
+    // At the floor, arming first would only trip the auto-disarm again: the
+    // balance sync is the fix that has to come first.
+    fix: checks.armed === "fail" && checks.credit !== "fail",
+    disabled: checks.armed === "unknown",
+  });
+
+  setCheck("backup", checks.backup, {
+    ok: s.connState === "LTE_ACTIVE" ? "Carrying traffic right now."
+      : s.backupCheckedAt ? `Reachable. Pinged ${ago(s.backupCheckedAt)}.`
+      : "Reachable.",
+    fail: "Unreachable. The Spitz or its SIM is not answering.",
+    unknown: s.armed === false ? "Not checked while the fallback is disarmed." : "Not checked yet.",
+  }[checks.backup]);
+
+  setCheck("guard", checks.guard, {
+    ok: "Locked. Only allowlisted devices reach LTE during a failover.",
+    warn: guard.openUntil
+      ? `Open until ${clock(guard.openUntil)}. Every device can reach LTE, then it relocks itself.`
+      : "Open. Every device can reach LTE.",
+    fail: "Missing. The firewall chain is gone, so nothing holds devices off LTE.",
+    unknown: "Not read yet.",
+  }[checks.guard]);
+  setButton($("guardbtn"), {
+    ok: `Open to all · ${guard.openMinutes ?? 60} min`,
+    warn: "Relock now",
+    fail: "Rebuild guard",
+    unknown: "…",
+  }[checks.guard], {
+    fix: checks.guard === "warn" || checks.guard === "fail",
+    disabled: checks.guard === "unknown",
+  });
+
+  setCheck("credit", checks.credit, !bal ? "Not synced. Enter the CallYa balance below to start tracking it." : {
+    ok: `${eur(bal.eur)} · warns below ${eur(bal.lowEur)}, disarms at ${eur(bal.reserveEur)}`,
+    warn: `${eur(bal.eur)} · below ${eur(bal.lowEur)}, top up soon`,
+    fail: `${eur(bal.eur)} · at the ${eur(bal.reserveEur)} reserve floor. Top up, sync, then arm again.`,
+  }[checks.credit]);
+  const creditBtn = $("creditbtn");
+  creditBtn.hidden = checks.credit === "ok";
+  creditBtn.classList.toggle("fix", checks.credit === "fail" || checks.credit === "unknown");
+
+  setCheck("drill", checks.drill,
+    !drill ? "No result recorded yet. It runs early on the 1st of each month."
+      : drill.ok ? `Passed ${stamp(drill.ts)} · ${data(drill.bytes)} in ${DEC1.format(drill.seconds)} s`
+      : `Failed ${stamp(drill.ts)} · check the Spitz and its SIM`);
+}
+
+function renderGauge(bal, credit) {
   const gauge = $("gauge");
   const ticks = $("ticks");
 
   if (!bal) {
     gauge.classList.add("empty");
-    gauge.classList.remove("low");
+    gauge.classList.remove("low", "floor");
     gauge.setAttribute("aria-label", "Prepaid balance not synced yet");
     $("fill").style.height = "0%";
     $("ghost").style.height = "0%";
@@ -99,7 +250,8 @@ function renderGauge(bal) {
   const spent = Math.max(0, bal.anchorEur - bal.eur);
 
   gauge.classList.remove("empty");
-  gauge.classList.toggle("low", !!bal.low);
+  gauge.classList.toggle("low", credit === "warn");
+  gauge.classList.toggle("floor", credit === "fail");
   gauge.setAttribute(
     "aria-label",
     `Prepaid balance ${eur(bal.eur)} of a ${ceiling} euro scale, ${eur(spent)} used since the last sync`
@@ -132,18 +284,6 @@ function renderGauge(bal) {
       : `Synced at ${eur(bal.anchorEur)} on ${stamp(bal.anchorTs)}`;
 }
 
-function renderSession(s) {
-  const box = $("session");
-  if (!s.session) {
-    box.hidden = true;
-    return;
-  }
-  box.hidden = false;
-  const ran = dur(Date.now() - Date.parse(s.session.startTs));
-  $("sessionline").textContent =
-    `${ran} · ${data(s.session.bytes)} · ${eur(s.session.costEur)}`;
-}
-
 function renderTotals(totals) {
   if (!totals) return;
   for (const k of ["day", "month", "total"]) {
@@ -154,44 +294,6 @@ function renderTotals(totals) {
     volume.textContent = t ? data(t.bytes) : "–";
     cost.textContent = t ? eur(t.costEur) : "";
     $(k).replaceChildren(volume, cost);
-  }
-}
-
-function renderArm(s) {
-  const btn = $("armbtn");
-  btn.textContent = s.armed ? "Disarm fallback" : "Arm fallback";
-  $("armcap").textContent = s.armed
-    ? "LTE takes over on its own when the cable drops."
-    : "LTE stays off. A cable outage will not fail over.";
-}
-
-function renderGuard(guard = {}) {
-  const btn = $("guardbtn");
-  const cap = $("guardcap");
-  const flag = $("guardflag");
-  btn.classList.remove("costly");
-
-  // An unlocked guard is a spending state, so it earns a place in the
-  // at-a-glance row next to the link flags.
-  flag.hidden = guard.state === "locked" || !guard.state;
-  flag.textContent = guard.state === "open" ? "guard open" : "guard missing";
-
-  if (guard.state === "open") {
-    $("guardname").textContent = "LTE guard — open";
-    cap.textContent = guard.openUntil
-      ? `Every device can reach LTE until ${clock(guard.openUntil)}, then it relocks itself.`
-      : "Every device can reach LTE.";
-    btn.textContent = "Relock now";
-  } else if (guard.state === "missing") {
-    $("guardname").textContent = "LTE guard — missing";
-    cap.textContent = "The firewall chain is gone. Nothing is holding devices off LTE.";
-    btn.textContent = "Rebuild guard";
-    btn.classList.add("costly");
-  } else {
-    $("guardname").textContent = "LTE guard — locked";
-    cap.textContent = "Only allowlisted devices reach LTE during a failover.";
-    btn.textContent = `Open to all · ${guard.openMinutes ?? 60} min`;
-    btn.classList.add("costly");
   }
 }
 
@@ -217,6 +319,10 @@ function renderHistory(history = []) {
   $("empty").hidden = rows.length > 0;
 }
 
+// When the last good status arrived, so a lost collector reads as stale
+// instead of leaving the last verdict painted as if it were live.
+let lastContactAt = null;
+
 async function refresh() {
   let s;
   try {
@@ -224,23 +330,18 @@ async function refresh() {
     if (!res.ok) throw new Error("status " + res.status);
     s = await res.json();
   } catch (err) {
-    const foot = $("updated");
-    foot.className = "cap lost";
-    foot.textContent = `Lost contact with the collector (${err.message}). Retrying every 10 s.`;
+    const since = lastContactAt ? ` Everything below is from ${clock(lastContactAt)}.` : "";
+    paint("--idle", "No contact", `Can't reach the collector (${err.message}). Retrying every 10 s.${since}`, { stale: true });
+    $("context").textContent = lastContactAt ? "Last contact " + ago(lastContactAt) : "";
     return;
   }
+  lastContactAt = Date.now();
 
-  renderState(s);
-  renderGauge(s.balance);
-  renderSession(s);
+  renderVerdict(s);
+  renderChecks(s);
+  renderGauge(s.balance, s.readiness.checks.credit);
   renderTotals(s.totals);
-  renderArm(s);
-  renderGuard(s.guard);
   renderHistory(s.history);
-
-  const foot = $("updated");
-  foot.className = "cap";
-  foot.textContent = s.updatedAt ? `Updated ${stamp(s.updatedAt)}` : "No sample taken yet.";
 }
 
 async function post(btn, url, body) {
@@ -260,6 +361,11 @@ async function post(btn, url, body) {
 
 $("armbtn").addEventListener("click", (e) => post(e.currentTarget, "api/toggle"));
 $("guardbtn").addEventListener("click", (e) => post(e.currentTarget, "api/guard"));
+$("creditbtn").addEventListener("click", () => {
+  const input = $("balin");
+  input.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  input.focus({ preventScroll: true });
+});
 
 $("balform").addEventListener("submit", (e) => {
   e.preventDefault();
