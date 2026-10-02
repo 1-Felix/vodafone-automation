@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { GUARD_STATE_CMD, parseGuardState, parseIfaceStatus, parseKmwanStatus } from "./flint.mjs";
+import { GUARD_STATE_CMD, RELAY_CMD, parseGuardState, parseIfaceStatus, parseKmwanStatus } from "./flint.mjs";
 
 test("parseIfaceStatus reads up/autostart/l3_device", () => {
   const s = parseIfaceStatus(JSON.stringify({ up: true, autostart: true, l3_device: "lan5" }));
@@ -67,4 +67,26 @@ test("GUARD_STATE_CMD exits 0 when the chain is missing, so 'missing' is reporte
     throw err;
   }
   assert.equal(parseGuardState(out), "missing");
+});
+
+test("RELAY_CMD posts the body on stdin to the URL on stdin's first line", (t) => {
+  // The webhook URL carries its token, so it travels on stdin rather than in
+  // the command line, where `ps` on the Flint would show it.
+  assert.ok(!RELAY_CMD.includes("http"), "no URL baked into the command");
+  const dir = mkdtempSync(join(tmpdir(), "fake-curl-"));
+  writeFileSync(join(dir, "curl"), '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\necho "BODY:$(cat)"\n');
+  chmodSync(join(dir, "curl"), 0o755);
+  let out;
+  try {
+    out = execFileSync("sh", ["-c", RELAY_CMD], {
+      env: { ...process.env, PATH: `${dir}${delimiter}${process.env.PATH}` },
+      input: 'https://discord.com/api/webhooks/1/tok\n{"embeds":[{"description":"failover"}]}',
+      encoding: "utf8",
+    });
+  } catch (err) {
+    if (err.code === "ENOENT") return t.skip("no POSIX sh on this machine");
+    throw err;
+  }
+  assert.match(out, /^ARG:https:\/\/discord\.com\/api\/webhooks\/1\/tok$/m);
+  assert.match(out, /^BODY:\{"embeds":\[\{"description":"failover"\}\]\}$/m);
 });

@@ -1,5 +1,6 @@
 import { log } from "./log.mjs";
-import { notify, Color, Tier } from "./notify.mjs";
+import { notify, setRelay, Color, Tier } from "./notify.mjs";
+import { relayWebhook } from "./flint.mjs";
 import { api, checkDeviceMode, getCSRFToken, login, logout } from "./station.mjs";
 import { collectOnce } from "./collector.mjs";
 import { startLteMonitor } from "./lte-monitor.mjs";
@@ -156,6 +157,7 @@ log(`Signal collector: ${COLLECTOR_ENABLED ? "enabled" : "disabled"}`);
 log(`LTE failover monitor: ${LTE_ENABLED ? "enabled" : "disabled"}`);
 
 if (LTE_ENABLED && !once) {
+  setRelay(relayWebhook);
   try {
     const monitor = startLteMonitor();
     startDashboard({ port: DASHBOARD_PORT, ...monitor });

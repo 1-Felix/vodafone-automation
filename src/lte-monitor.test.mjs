@@ -420,3 +420,33 @@ test("status carries readiness, the last health ping and the persisted drill res
   assert.deepEqual((await restarted.getStatus()).drill,
     { ts: "2099-04-01T03:00:00.000Z", ok: false, bytes: 0, seconds: 120 }, "survives a restart");
 });
+
+// After the 2099-03/04 drills above on purpose: it pins its own day, so the
+// alert memory it persists cannot silence the real-clock tests.
+test("a restart remembers which rate-limited alerts it already sent today", async () => {
+  // 2026-10-02: redeploying the monitor re-sent the day's CRITICAL leak alert,
+  // because the once-per-day memory lived only in the process.
+  const script = [
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 0 },
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 20_000_000 },
+  ];
+  const nowIso = () => "2099-06-01T12:00:00.000Z";
+  const firstSent = [];
+  const firstFlint = fakeFlint(script);
+  const first = startLteMonitor({
+    flint: firstFlint, spitz: firstFlint, nowIso, autoStart: false,
+    send: async (msg, color, tier) => firstSent.push({ msg, tier }),
+  });
+  await first.tick(); firstFlint.advance();
+  await first.tick(); // 20 MB of background → critical leak
+  assert.ok(firstSent.some((s) => /leak/i.test(s.msg) && s.tier === Tier.CRITICAL), "leak alert sent once");
+
+  const restartedSent = [];
+  const restartedFlint = fakeFlint(script.slice(1));
+  const restarted = startLteMonitor({
+    flint: restartedFlint, spitz: restartedFlint, nowIso, autoStart: false,
+    send: async (msg, color, tier) => restartedSent.push({ msg, tier }),
+  });
+  await restarted.tick();
+  assert.ok(!restartedSent.some((s) => /leak|background/i.test(s.msg)), "not re-sent after the restart");
+});

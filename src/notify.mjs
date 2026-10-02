@@ -30,29 +30,51 @@ export function resolveWebhook(tier) {
   return process.env.DISCORD_WEBHOOK_URL || null;
 }
 
+// Second way out for when the NUC cannot reach Discord itself: the LTE guard
+// keeps the NUC off the SIM, so during a failover alerts leave via the Flint.
+let relay = null;
+
+export function setRelay(fn) {
+  relay = fn;
+}
+
+const DIRECT_TIMEOUT_MS = 10_000;
+
 export async function notify(message, color = Color.RED, tier = Tier.WARN) {
   log(`[Discord:${tier}] ${message}`);
 
   const url = resolveWebhook(tier);
   if (!url) return;
 
+  const body = JSON.stringify({
+    embeds: [
+      {
+        title: "Vodafone Bridge Monitor",
+        description: message,
+        color,
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
   try {
     await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        embeds: [
-          {
-            title: "Vodafone Bridge Monitor",
-            description: message,
-            color,
-            timestamp: new Date().toISOString(),
-          },
-        ],
-      }),
+      body,
+      signal: AbortSignal.timeout(DIRECT_TIMEOUT_MS),
     });
+    return;
   } catch {
-    // Silently ignore — webhook failures are expected when the network is
-    // disrupted (which is exactly when bridge mode gets lost).
+    // No route, no DNS or no answer: expected when the network is disrupted,
+    // which is exactly when we alert most.
+  }
+
+  if (!relay) return;
+  try {
+    await relay(url, body);
+    log(`[Discord:${tier}] relayed via the Flint`);
+  } catch (err) {
+    log(`Discord relay via the Flint failed: ${err.message}`);
   }
 }

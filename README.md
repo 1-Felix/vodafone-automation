@@ -162,8 +162,15 @@ member `secondwan`):
   `get_current_time` retry loop hammering worldtimeapi.org, GoodCloud, kmwan
   probe storms, Spitz DNS advertised to the LAN) can silently out-spend the
   actual failover many times over.
-- LTE guard: only allowlisted devices (NUC, Felix-PC) may forward onto the LTE
-  uplink — everything else is rejected while on failover. Allowlist lives in
+- LTE guard: the fallback is for Felix-PC only — every other device is rejected
+  on the LTE uplink while on failover. The NUC keeps just its management path to
+  the Spitz (`192.168.8.0/24`), which the monitor's metering and modem kill use
+  over SSH and which must never be cut. Since 2026-10-02 the NUC is otherwise off
+  the SIM: that day its Cloudflare tunnel served ~36 MB of Immich Frame to the
+  internet over LTE in 13 min, while the laptop actually in use got nothing.
+  Discord alerts still get out: when the direct webhook call fails, `notify()`
+  relays it through the Flint (`relayWebhook`), whose own traffic is not
+  guarded. Allowlist lives in
   `/etc/firewall.lte_guard` on the Flint (persistent iptables include). The
   dashboard button opens LTE for all devices for `GUARD_OPEN_MINUTES` (default
   60), then auto-relocks; Flint reboot and collector restart also relock.

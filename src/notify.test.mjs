@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notify, resolveWebhook, Color, Tier } from "./notify.mjs";
+import { notify, resolveWebhook, setRelay, Color, Tier } from "./notify.mjs";
 
 const ENV_KEYS = [
   "DISCORD_WEBHOOK_URL",
@@ -131,6 +131,51 @@ test("embed carries the message and colour", async () => {
   const body = JSON.parse(f.calls[0].opts.body);
   assert.equal(body.embeds[0].description, "hello **world**");
   assert.equal(body.embeds[0].color, Color.GREEN);
+});
+
+// The LTE guard keeps the NUC off the SIM, so during a failover the direct
+// webhook call has no route and the alert must go out through the Flint.
+async function withRelay(fetchImpl, relayImpl, fn) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  setRelay(relayImpl);
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = original;
+    setRelay(null);
+  }
+}
+
+test("a direct send that fails is relayed through the Flint", async () => {
+  const relayed = [];
+  await withRelay(
+    async () => { throw new TypeError("fetch failed"); },
+    async (url, body) => { relayed.push({ url, body: JSON.parse(body) }); },
+    () => withEnv({ DISCORD_WEBHOOK_CRITICAL: "https://d/crit" }, () => notify("failover active", Color.RED, Tier.CRITICAL)),
+  );
+  assert.equal(relayed.length, 1);
+  assert.equal(relayed[0].url, "https://d/crit");
+  assert.equal(relayed[0].body.embeds[0].description, "failover active");
+});
+
+test("a delivered direct send is not relayed", async () => {
+  const relayed = [];
+  await withRelay(
+    async () => ({ ok: true }),
+    async (url) => { relayed.push(url); },
+    () => withEnv({ DISCORD_WEBHOOK_URL: "https://d/all" }, () => notify("fine", Color.GREEN, Tier.LOG)),
+  );
+  assert.equal(relayed.length, 0);
+});
+
+test("a relay that fails too is swallowed", async () => {
+  await withRelay(
+    async () => { throw new TypeError("fetch failed"); },
+    async () => { throw new Error("ssh: connect timed out"); },
+    // Not throwing is the assertion: alerting must never take the tick down.
+    () => withEnv({ DISCORD_WEBHOOK_URL: "https://d/all" }, () => notify("both paths down", Color.RED, Tier.CRITICAL)),
+  );
 });
 
 test("webhook failure is swallowed", async () => {

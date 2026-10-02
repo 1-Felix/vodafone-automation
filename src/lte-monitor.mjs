@@ -18,6 +18,13 @@ const STATE_FILE = join(DATA_DIR, "lte-state.json");
 const BALANCE_FILE = join(DATA_DIR, "lte-balance.jsonl");
 const GUARD_OPEN_MS = parseInt(process.env.GUARD_OPEN_MINUTES ?? "60") * 60_000;
 const GUARD_STUCK_ALERT_MS = 30 * 60_000;
+// When each rate-limited alert last fired. Persisted so a restart does not
+// re-send today's leak or low-balance alert (a redeploy did on 2026-10-02).
+const ALERT_MEMORY_KEYS = ["lastLeakWarnDay", "lastLeakCritDay", "lastBalanceAlertAt", "lastReserveAlertAt", "lastBackupAlertAt"];
+
+function alertMemory(state) {
+  return Object.fromEntries(ALERT_MEMORY_KEYS.filter((k) => state?.[k] !== undefined).map((k) => [k, state[k]]));
+}
 
 function loadJsonl(file) {
   try {
@@ -56,7 +63,7 @@ export function startLteMonitor(deps = {}) {
   let guardState = null;
   let guardOpenUntil = null; // epoch ms | null (null while open = not ours → relock)
   let lastGuardStuckAlertAt = 0;
-  let alertState = {};
+  let alertState = alertMemory(persisted.alerts);
   let session = null;
   let lastCounter = null;
   let lastHealthAt = 0;
@@ -171,6 +178,11 @@ export function startLteMonitor(deps = {}) {
       guardOpenUntil: guardOpenUntil ? new Date(guardOpenUntil).toISOString() : null,
     }, now);
     alertState = state;
+    const memory = alertMemory(state);
+    if (JSON.stringify(memory) !== JSON.stringify(persisted.alerts ?? {})) {
+      persisted.alerts = memory;
+      writeFileSync(STATE_FILE, JSON.stringify(persisted));
+    }
     for (const a of alerts) await send(a.message, a.color, a.tier);
 
     // Balance reserve floor: kill the LTE path before the credit is gone, so a

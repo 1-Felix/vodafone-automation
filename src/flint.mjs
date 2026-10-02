@@ -13,7 +13,7 @@ export function parseIfaceStatus(jsonStr) {
   return { up: !!j.up, autostart: !!j.autostart, device: j.l3_device ?? j.device ?? null };
 }
 
-export function flintSsh(command) {
+export function flintSsh(command, input) {
   const args = [
     "-i", KEY,
     "-o", `UserKnownHostsFile=${KNOWN_HOSTS}`,
@@ -23,11 +23,22 @@ export function flintSsh(command) {
     command,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ssh", args, { timeout: 150_000 }, (err, stdout, stderr) => {
+    const child = execFile("ssh", args, { timeout: 150_000 }, (err, stdout, stderr) => {
       if (err) reject(new Error(`ssh ${command}: ${stderr || err.message}`.trim()));
       else resolve(stdout);
     });
+    if (input !== undefined) child.stdin.end(input);
   });
+}
+
+// Posts a Discord webhook from the Flint itself. Its own traffic is not subject
+// to the LTE guard, so alerts still leave while the NUC is kept off the SIM.
+// The URL holds the webhook token, so it arrives on stdin's first line instead
+// of the command line, where `ps` on the Flint would show it.
+export const RELAY_CMD = `read -r url; curl -sf -m 15 -H 'Content-Type: application/json' --data-binary @- "$url"`;
+
+export async function relayWebhook(url, body) {
+  await flintSsh(RELAY_CMD, `${url}\n${body}`);
 }
 
 export async function getIfaceStatus(iface) {
