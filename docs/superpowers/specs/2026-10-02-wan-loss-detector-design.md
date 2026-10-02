@@ -86,7 +86,9 @@ while kmwan routes everything else over LTE. That must hold during `force_dead`
 ### States
 
 - **WATCH** (kmwan in charge): enter **HOLD** when all of these hold:
-  - the last 10 s window has ≥ 15 probes sent and ≥ 50% of them lost
+  - the last 10 s window has ≥ 27 probes sent (9 rounds, so a total blackout
+    holds after ~9 s; raised from 15 on 2026-10-02 at the user's request) and
+    ≥ 50% of them lost
     (`lost * 2 >= sent`, integer arithmetic);
   - only samples taken *after* the last release count (otherwise a release would
     re-trigger on stale loss);
@@ -195,7 +197,7 @@ Unit tests in `src/wan-loss-guard.test.mjs` source `flint/wan-loss-guard` under
 `sh`). They cover:
 
 - triggers at 15 of 30 lost in 10 s, not at 14 of 30;
-- does not trigger with fewer than 15 probes in the window;
+- does not trigger with fewer than 27 probes in the window;
 - ignores samples from before the last release;
 - holds through a relapse inside the 120-s window;
 - releases after 120 s with ≤ 3 of ≥ 300 lost, not with 4;

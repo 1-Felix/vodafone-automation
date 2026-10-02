@@ -188,10 +188,10 @@ call the cable online, and it fails back on the first answered probe.
 
 - Once a second it pings 9.9.9.9, 1.0.0.1 and 8.8.4.4 over `eth1`. kmwan
   probes different targets, so the two views are independent.
-- When the last 10 s hold at least 15 probes and half of them were lost, it
-  runs `force_dead wan` and kmwan sends everything over LTE. It never does this
-  without a working LTE path: `secondwan` up in netifd and `secondwan:online`
-  in `/proc/gl-kmwan/config`. After a start it arms only once the cable has
+- When the last 10 s hold at least 27 probes and half of them were lost, it
+  runs `force_dead wan` and kmwan sends everything over LTE. A total blackout
+  therefore takes ~9 s to hold. It never does this without a working LTE path:
+  `secondwan` up in netifd and `secondwan:online` in `/proc/gl-kmwan/config`. After a start it arms only once the cable has
   answered, so a Flint reboot before `eth1` has its lease does not hold.
 - It hands back with `restore_detect wan` after 2 min with ≥ 300 probes and
   ≤ 1 % lost, at once if LTE goes away, and after 30 min at the latest.

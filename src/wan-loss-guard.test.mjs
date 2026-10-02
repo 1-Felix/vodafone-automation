@@ -70,9 +70,10 @@ test("does not hold at 14 of 30 lost", opts, () => {
   assert.equal(out, lines("state=watch"));
 });
 
-test("needs at least 15 probes in the window before it holds", opts, () => {
-  const out = decide(`feed 1 4 3; echo "state=$STATE"; wlg_step 5 3 3; echo "state=$STATE"`);
-  assert.equal(out, lines("state=watch", "force_dead wan", "event detector-hold lost=15/15", "state=hold"));
+test("needs at least 27 probes in the window before it holds", opts, () => {
+  // 9 rounds: a total blackout holds after about 9 s, not 5.
+  const out = decide(`feed 1 8 3; echo "state=$STATE"; wlg_step 9 3 3; echo "state=$STATE"`);
+  assert.equal(out, lines("state=watch", "force_dead wan", "event detector-hold lost=27/27", "state=hold"));
 });
 
 test("never holds while LTE is unavailable", opts, () => {
@@ -81,22 +82,22 @@ test("never holds while LTE is unavailable", opts, () => {
 });
 
 test("loss from before a release does not count toward the next hold", opts, () => {
-  const out = decide(`feed 1 5 3; LTE=0; wlg_step 6 3 3; LTE=1; wlg_step 7 3 3; echo "state=$STATE"; feed 8 11 3; echo "state=$STATE"`);
+  const out = decide(`feed 1 9 3; LTE=0; wlg_step 10 3 3; LTE=1; wlg_step 11 3 3; echo "state=$STATE"; feed 12 19 3; echo "state=$STATE"`);
   assert.equal(out, lines(
-    "force_dead wan", "event detector-hold lost=15/15",
-    "restore_detect wan", "event detector-release lte-unavailable lost=18/18",
+    "force_dead wan", "event detector-hold lost=27/27",
+    "restore_detect wan", "event detector-release lte-unavailable lost=30/30",
     "state=watch",
-    "force_dead wan", "event detector-hold lost=15/15",
+    "force_dead wan", "event detector-hold lost=27/27",
     "state=hold",
   ));
 });
 
 test("a relapse inside the 2-min window keeps the hold", opts, () => {
-  // Without the relapse the hold would end at t=125, once the loss of t=1..5
-  // left the window. With it, it ends at t=221: 3 of 360 lost, within 1%.
-  const out = decide(`feed 1 5 3; feed 6 100 0; feed 101 102 3; feed 103 130 0; echo "state=$STATE"; feed 131 230 0; echo "state=$STATE released=$LAST_RELEASE"`);
+  // Without the relapse the hold would end at t=128, when only the last lossy
+  // round is left in the window. With it, it ends at t=221: 3 of 360 lost, within 1%.
+  const out = decide(`feed 1 9 3; feed 10 100 0; feed 101 102 3; feed 103 130 0; echo "state=$STATE"; feed 131 230 0; echo "state=$STATE released=$LAST_RELEASE"`);
   assert.equal(out, lines(
-    "force_dead wan", "event detector-hold lost=15/15",
+    "force_dead wan", "event detector-hold lost=27/27",
     "state=hold",
     "restore_detect wan", "event detector-release clean lost=3/360",
     "state=watch released=221",
@@ -104,30 +105,30 @@ test("a relapse inside the 2-min window keeps the hold", opts, () => {
 });
 
 test("releases after 2 min with 3 of 360 lost", opts, () => {
-  const out = decide(`feed 1 5 3; feed 6 49 0; wlg_step 50 3 3; feed 51 125 0; echo "state=$STATE released=$LAST_RELEASE"`);
+  const out = decide(`feed 1 9 3; feed 10 49 0; wlg_step 50 3 3; feed 51 129 0; echo "state=$STATE released=$LAST_RELEASE"`);
   assert.equal(out, lines(
-    "force_dead wan", "event detector-hold lost=15/15",
+    "force_dead wan", "event detector-hold lost=27/27",
     "restore_detect wan", "event detector-release clean lost=3/360",
-    "state=watch released=125",
+    "state=watch released=129",
   ));
 });
 
 test("keeps holding with 4 of 360 lost", opts, () => {
-  const out = decide(`feed 1 5 3; feed 6 49 0; wlg_step 50 3 3; wlg_step 51 1 3; feed 52 125 0; echo "state=$STATE"`);
-  assert.equal(out, lines("force_dead wan", "event detector-hold lost=15/15", "state=hold"));
+  const out = decide(`feed 1 9 3; feed 10 49 0; wlg_step 50 3 3; wlg_step 51 1 3; feed 52 129 0; echo "state=$STATE"`);
+  assert.equal(out, lines("force_dead wan", "event detector-hold lost=27/27", "state=hold"));
 });
 
 test("does not release on fewer than 300 probes, however clean", opts, () => {
   // One round every 2 s: a clean window of only 180 probes.
-  const out = decide(`feed 1 5 3; feed 6 400 0 2; echo "state=$STATE"`);
-  assert.equal(out, lines("force_dead wan", "event detector-hold lost=15/15", "state=hold"));
+  const out = decide(`feed 1 9 3; feed 10 400 0 2; echo "state=$STATE"`);
+  assert.equal(out, lines("force_dead wan", "event detector-hold lost=27/27", "state=hold"));
 });
 
 test("releases at once when LTE goes away and holds again when it is back", opts, () => {
-  const out = decide(`feed 1 5 3; LTE=0; wlg_step 6 3 3; feed 7 30 3; echo "state=$STATE"; LTE=1; wlg_step 31 3 3; echo "state=$STATE"`);
+  const out = decide(`feed 1 9 3; LTE=0; wlg_step 10 3 3; feed 11 30 3; echo "state=$STATE"; LTE=1; wlg_step 31 3 3; echo "state=$STATE"`);
   assert.equal(out, lines(
-    "force_dead wan", "event detector-hold lost=15/15",
-    "restore_detect wan", "event detector-release lte-unavailable lost=18/18",
+    "force_dead wan", "event detector-hold lost=27/27",
+    "restore_detect wan", "event detector-release lte-unavailable lost=30/30",
     "state=watch",
     "force_dead wan", "event detector-hold lost=30/30",
     "state=hold",
@@ -135,13 +136,13 @@ test("releases at once when LTE goes away and holds again when it is back", opts
 });
 
 test("releases after 30 min and holds again only on fresh loss", opts, () => {
-  const out = decide(`feed 1 5 3; wlg_step 1804 3 3; echo "state=$STATE"; wlg_step 1805 3 3; feed 1806 1809 3; echo "state=$STATE"; wlg_step 1810 3 3; echo "state=$STATE"`);
+  const out = decide(`feed 1 9 3; wlg_step 1808 3 3; echo "state=$STATE"; wlg_step 1809 3 3; feed 1810 1817 3; echo "state=$STATE"; wlg_step 1818 3 3; echo "state=$STATE"`);
   assert.equal(out, lines(
-    "force_dead wan", "event detector-hold lost=15/15",
+    "force_dead wan", "event detector-hold lost=27/27",
     "state=hold",
     "restore_detect wan", "event detector-release max-hold lost=6/6",
     "state=watch",
-    "force_dead wan", "event detector-hold lost=15/15",
+    "force_dead wan", "event detector-hold lost=27/27",
     "state=hold",
   ));
 });
@@ -149,14 +150,14 @@ test("releases after 30 min and holds again only on fresh loss", opts, () => {
 test("after a start it holds only once the cable has answered", opts, () => {
   // At boot eth1 may not have its lease yet. Rounds before the first answer
   // do not count, or the house would stay on LTE for 2 min after the cable is up.
-  const out = decide(`ARMED=0; feed 1 10 3; echo "state=$STATE"; wlg_step 11 2 3; feed 12 14 3; echo "state=$STATE"; wlg_step 15 3 3; echo "state=$STATE"`);
-  assert.equal(out, lines("state=watch", "state=watch", "force_dead wan", "event detector-hold lost=14/15", "state=hold"));
+  const out = decide(`ARMED=0; feed 1 10 3; echo "state=$STATE"; wlg_step 11 2 3; feed 12 18 3; echo "state=$STATE"; wlg_step 19 3 3; echo "state=$STATE"`);
+  assert.equal(out, lines("state=watch", "state=watch", "force_dead wan", "event detector-hold lost=26/27", "state=hold"));
 });
 
 test("re-applies force_dead when kmwan re-creates wan unforced", opts, () => {
   // No block at all (FORCED empty) means netifd has wan down: nothing to force.
-  const out = decide(`feed 1 5 3; echo @6; FORCED=false; wlg_step 6 3 3; echo @7; FORCED=; wlg_step 7 3 3; echo @8; FORCED=true; wlg_step 8 3 3`);
-  assert.equal(out, lines("force_dead wan", "event detector-hold lost=15/15", "@6", "force_dead wan", "@7", "@8"));
+  const out = decide(`feed 1 9 3; echo @10; FORCED=false; wlg_step 10 3 3; echo @11; FORCED=; wlg_step 11 3 3; echo @12; FORCED=true; wlg_step 12 3 3`);
+  assert.equal(out, lines("force_dead wan", "event detector-hold lost=27/27", "@10", "force_dead wan", "@11", "@12"));
 });
 
 const fixture = (name, text) => `cat > "$d/${name}" <<'EOF'\n${text}EOF`;
