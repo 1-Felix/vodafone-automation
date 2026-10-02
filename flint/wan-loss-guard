@@ -1,0 +1,87 @@
+#!/bin/sh
+# wan-loss-guard: holds kmwan off the cable WAN while it loses packets and
+# hands it back after two clean minutes. kmwan alone misses lossy blackouts
+# (its probes get just enough answers) and fails back on the first answered
+# probe. Design: docs/superpowers/specs/2026-10-02-wan-loss-detector-design.md
+#
+# Sourcing this file only defines the functions (the tests do that); the loop
+# runs when it is executed as wan-loss-guard.
+
+WAN_IFACE=wan
+WAN_DEV=eth1
+LTE_IFACE=secondwan
+TARGETS="9.9.9.9 1.0.0.1 8.8.4.4"   # disjoint from kmwan's own probe targets
+TRIGGER_SECS=10       # hold when at least half the probes of the last 10 s were lost
+TRIGGER_MIN_SENT=15
+RELEASE_SECS=120      # release when at most 1% of the last 2 min were lost
+RELEASE_MIN_SENT=300
+MAX_HOLD_SECS=1800
+KMWAN_LIB=/lib/functions/kmwan.sh
+KMWAN_STATUS=/proc/gl-kmwan/status
+KMWAN_CONFIG=/proc/gl-kmwan/config
+UPTIME=/proc/uptime
+EVENT_LOG=/root/wan-events.log
+EVENT_URL=http://192.168.0.37:8799/event
+
+STATE=watch       # watch: kmwan decides; hold: wan forced dead
+HOLD_START=0
+LAST_RELEASE=0
+HIST=""           # one "<second> <lost> <sent>" line per probe round, oldest first
+
+# Appends a probe round and drops rounds older than the release window.
+wlg_record() { # <second> <lost> <sent>
+  local min=$(( $1 - RELEASE_SECS )) keep="" e l s
+  while read -r e l s; do
+    [ -n "$e" ] && [ "$e" -gt "$min" ] && keep="$keep$e $l $s
+"
+  done <<EOF
+$HIST
+EOF
+  HIST="$keep$1 $2 $3
+"
+}
+
+# Sums the rounds newer than both <now>-<secs> and <since> into W_LOST/W_SENT.
+wlg_window() { # <now> <secs> <since>
+  local from=$(( $1 - $2 )) e l s
+  W_LOST=0 W_SENT=0
+  while read -r e l s; do
+    [ -n "$e" ] && [ "$e" -gt "$from" ] && [ "$e" -gt "$3" ] || continue
+    W_LOST=$(( W_LOST + l )) W_SENT=$(( W_SENT + s ))
+  done <<EOF
+$HIST
+EOF
+}
+
+# One probe round's verdict: enter or leave the hold.
+wlg_step() { # <now> <lost> <sent>
+  local now=$1 reason
+  wlg_record "$now" "$2" "$3"
+  if [ "$STATE" = watch ]; then
+    # Only rounds after the last release count, or a release would re-trigger
+    # on the loss that caused the hold.
+    wlg_window "$now" "$TRIGGER_SECS" "$LAST_RELEASE"
+    [ "$W_SENT" -ge "$TRIGGER_MIN_SENT" ] && [ $(( W_LOST * 2 )) -ge "$W_SENT" ] || return 0
+    wlg_lte_ok || return 0   # never force the cable off without a working LTE path
+    force_dead "$WAN_IFACE"
+    STATE=hold HOLD_START=$now
+    wlg_event detector-hold "lost=$W_LOST/$W_SENT"
+    return 0
+  fi
+  wlg_window "$now" "$RELEASE_SECS" 0
+  if ! wlg_lte_ok; then
+    reason=lte-unavailable   # a lossy cable beats no connection
+  elif [ $(( now - HOLD_START )) -ge "$MAX_HOLD_SECS" ]; then
+    reason=max-hold          # kmwan re-evaluates; fresh loss holds again
+  elif [ "$W_SENT" -ge "$RELEASE_MIN_SENT" ] && [ $(( W_LOST * 100 )) -le "$W_SENT" ]; then
+    reason=clean
+  else
+    # kmwan re-creates wan unforced after a netifd ifdown/ifup (link bounce,
+    # the Station's fallback lease). No block at all means wan is down.
+    [ "$(wlg_wan_forced)" = false ] && force_dead "$WAN_IFACE"
+    return 0
+  fi
+  restore_detect "$WAN_IFACE"
+  STATE=watch LAST_RELEASE=$now
+  wlg_event detector-release "$reason"
+}
