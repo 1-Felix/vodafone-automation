@@ -85,3 +85,88 @@ wlg_step() { # <now> <lost> <sent>
   STATE=watch LAST_RELEASE=$now
   wlg_event detector-release "$reason"
 }
+
+# Seconds since boot: NTP fixing the wall clock after boot must not stretch or
+# freeze the windows.
+wlg_clock() {
+  local rest
+  read -r NOW rest < "$UPTIME"
+  NOW=${NOW%.*}
+}
+
+# LTE can carry traffic: netifd has secondwan up (it is down while disarmed on
+# the dashboard) and kmwan lists it online. A missing line means offline, as
+# in GL's own kmwan.lua.
+wlg_lte_ok() {
+  ubus call "network.interface.$LTE_IFACE" status 2>/dev/null | grep -q '"up": true' &&
+    grep -qx "$LTE_IFACE:online" "$KMWAN_CONFIG" 2>/dev/null
+}
+
+# Prints the force_dead flag (true/false) of wan's block in kmwan's status
+# table, or nothing when kmwan has no block for it (netifd has wan down).
+wlg_wan_forced() {
+  awk -v want="$WAN_IFACE" '
+    NF == 0 { cur = ""; next }
+    $1 == "Interface" { next }
+    cur == "" { cur = $1 }
+    cur == want && $1 ~ /^force_dead:/ { sub(/^force_dead:/, "", $1); print $1; exit }
+  ' "$KMWAN_STATUS" 2>/dev/null
+}
+
+# Pings every target once over the cable, in parallel, and prints how many
+# stayed silent. Any failure counts: timeout, unreachable, eth1 missing.
+# Bound to eth1, the probes keep testing the cable while kmwan routes
+# everything else over LTE.
+wlg_probe() {
+  local pids="" lost=0 t p
+  for t in $TARGETS; do
+    ping -c 1 -W 1 -I "$WAN_DEV" "$t" >/dev/null 2>&1 &
+    pids="$pids $!"
+  done
+  for p in $pids; do
+    wait "$p" || lost=$(( lost + 1 ))
+  done
+  echo "$lost"
+}
+
+# Logs a transition the way the hotplug hooks do and wakes the NUC monitor.
+wlg_event() { # <action> <detail>
+  echo "$(date -Iseconds) $WAN_IFACE $1 $2" >> "$EVENT_LOG"
+  logger -t wan-loss-guard "$WAN_IFACE $1 $2"
+  ( curl -m 5 -s -X POST "$EVENT_URL" \
+      -H "Content-Type: application/json" \
+      -d "{\"iface\":\"$WAN_IFACE\",\"action\":\"$1\"}" >/dev/null 2>&1 & )
+}
+
+# SIGTERM from procd: hand the cable back to kmwan before exiting.
+wlg_shutdown() {
+  restore_detect "$WAN_IFACE"
+  [ "$STATE" = hold ] && wlg_event detector-release stopped
+  exit 0
+}
+
+wlg_main() {
+  . "$KMWAN_LIB"
+  if ! type force_dead >/dev/null 2>&1; then
+    logger -t wan-loss-guard "$KMWAN_LIB has no force_dead; not starting"
+    exit 1
+  fi
+  trap wlg_shutdown INT TERM
+  # A crash or a kill -9 may have left wan forced; start from kmwan's own view.
+  restore_detect "$WAN_IFACE"
+  local sent start lost
+  set -- $TARGETS
+  sent=$#
+  while :; do
+    wlg_clock; start=$NOW
+    lost=$(wlg_probe)
+    wlg_clock
+    wlg_step "$NOW" "$lost" "$sent"
+    # Replies take milliseconds; a round with timeouts already took a second.
+    [ "$NOW" = "$start" ] && sleep 1
+  done
+}
+
+case "$0" in
+  *wan-loss-guard) wlg_main ;;
+esac

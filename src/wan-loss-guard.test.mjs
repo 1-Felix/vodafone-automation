@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { KMWAN_LTE_BLOCK, KMWAN_STATUS_HEADER, KMWAN_WAN_BLOCK } from "./kmwan-status.fixture.mjs";
 
 const FLINT_DIR = fileURLToPath(new URL("../flint/", import.meta.url)).replaceAll("\\", "/");
 const GUARD = `${FLINT_DIR}wan-loss-guard`;
@@ -53,7 +54,7 @@ const decide = (body) => sh(DECIDE + body);
 const lines = (...l) => [...l, ""].join("\n");
 
 test("the Flint scripts have LF line endings (busybox chokes on CRLF)", () => {
-  for (const name of ["wan-loss-guard"]) {
+  for (const name of ["wan-loss-guard", "wan-loss-guard.init"]) {
     assert.ok(!readFileSync(`${FLINT_DIR}${name}`, "utf8").includes("\r"), `${name} has CRLF`);
   }
 });
@@ -148,4 +149,91 @@ test("re-applies force_dead when kmwan re-creates wan unforced", opts, () => {
   // No block at all (FORCED empty) means netifd has wan down: nothing to force.
   const out = decide(`feed 1 5 3; echo @6; FORCED=false; wlg_step 6 3 3; echo @7; FORCED=; wlg_step 7 3 3; echo @8; FORCED=true; wlg_step 8 3 3`);
   assert.equal(out, lines("force_dead wan", "event detector-hold lost=15/15", "@6", "force_dead wan", "@7", "@8"));
+});
+
+const fixture = (name, text) => `cat > "$d/${name}" <<'EOF'\n${text}EOF`;
+
+test("reads wan's force_dead flag from kmwan's status table", opts, () => {
+  const out = sh([
+    fixture("live", KMWAN_STATUS_HEADER + KMWAN_WAN_BLOCK + KMWAN_LTE_BLOCK),
+    fixture("held", KMWAN_STATUS_HEADER + KMWAN_WAN_BLOCK.replace("force_dead:false", "force_dead:true") + KMWAN_LTE_BLOCK),
+    fixture("lteheld", KMWAN_STATUS_HEADER + KMWAN_WAN_BLOCK + KMWAN_LTE_BLOCK.replace("force_dead:false", "force_dead:true")),
+    fixture("down", KMWAN_STATUS_HEADER + KMWAN_LTE_BLOCK),
+    `for f in live held lteheld down; do KMWAN_STATUS="$d/$f"; echo "$f=$(wlg_wan_forced)"; done`,
+  ].join("\n"));
+  assert.equal(out, lines("live=false", "held=true", "lteheld=false", "down="));
+});
+
+test("LTE counts as available only when netifd has secondwan up and kmwan lists it online", opts, () => {
+  const out = sh(`
+KMWAN_CONFIG="$d/config"
+UP=true
+ubus() { [ "$*" = "call network.interface.secondwan status" ] && printf '{\\n\\t"up": %s,\\n\\t"pending": false\\n}\\n' "$UP"; }
+check() { if wlg_lte_ok; then echo "$1=yes"; else echo "$1=no"; fi; }
+printf 'wan:online\\nsecondwan:online\\n' > "$KMWAN_CONFIG"; check armed
+UP=false; check disarmed
+UP=true; printf 'wan:online\\nsecondwan:offline\\n' > "$KMWAN_CONFIG"; check offline
+printf 'wan:online\\n' > "$KMWAN_CONFIG"; check dropped
+rm "$KMWAN_CONFIG"; check nokmwan
+`);
+  assert.equal(out, lines("armed=yes", "disarmed=no", "offline=no", "dropped=no", "nokmwan=no"));
+});
+
+test("probes every target once over eth1 and counts every failure as lost", opts, () => {
+  // 1.0.0.1 times out (exit 1); 8.8.4.4 fails the way a missing eth1 does (exit 2).
+  const out = sh(`
+ping() { echo "$*" >> "$d/calls"; case "$7" in 9.9.9.9) return 0 ;; 1.0.0.1) return 1 ;; *) return 2 ;; esac; }
+echo "lost=$(wlg_probe)"
+cat "$d/calls"
+`);
+  const [first, ...calls] = out.trim().split("\n");
+  assert.equal(first, "lost=2");
+  assert.deepEqual(calls.sort(), [
+    "-c 1 -W 1 -I eth1 1.0.0.1",
+    "-c 1 -W 1 -I eth1 8.8.4.4",
+    "-c 1 -W 1 -I eth1 9.9.9.9",
+  ]);
+});
+
+test("logs a transition and wakes the monitor the way the hotplug hooks do", opts, () => {
+  const out = sh(`
+EVENT_LOG="$d/events.log"
+logger() { echo "logger $*" >> "$d/side"; }
+curl() { echo "curl $*" >> "$d/side"; }
+wlg_event detector-hold lost=27/30
+n=0
+while [ "$(grep -c '^curl' "$d/side" 2>/dev/null)" != 1 ] && [ $n -lt 10 ]; do sleep 1; n=$((n + 1)); done
+cat "$EVENT_LOG" "$d/side"
+`);
+  const [logLine, ...side] = out.trim().split("\n");
+  assert.match(logLine, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:?\d\d wan detector-hold lost=27\/30$/);
+  assert.ok(side.includes("logger -t wan-loss-guard wan detector-hold lost=27/30"), side.join("\n"));
+  assert.ok(
+    side.includes('curl -m 5 -s -X POST http://192.168.0.37:8799/event -H Content-Type: application/json -d {"iface":"wan","action":"detector-hold"}'),
+    side.join("\n"),
+  );
+});
+
+test("stopping hands the cable back to kmwan and closes an open hold in the log", opts, () => {
+  const out = sh(`
+restore_detect() { echo "restore_detect $1"; }
+wlg_event() { echo "event $1 $2"; }
+(STATE=hold; wlg_shutdown); echo "exit=$?"
+(STATE=watch; wlg_shutdown); echo "exit=$?"
+`);
+  assert.equal(out, lines("restore_detect wan", "event detector-release stopped", "exit=0", "restore_detect wan", "exit=0"));
+});
+
+test("refuses to start when kmwan.sh has no force_dead (e.g. after a firmware upgrade)", opts, () => {
+  const out = sh(`
+KMWAN_LIB="$d/kmwan.sh"; : > "$KMWAN_LIB"
+logger() { echo "logger $*"; }
+(wlg_main); echo "exit=$?"
+`);
+  assert.match(out, /^logger -t wan-loss-guard \S+\/kmwan\.sh has no force_dead; not starting\nexit=1\n$/);
+});
+
+test("the clock is whole seconds since boot, immune to NTP jumps", opts, () => {
+  const out = sh(`UPTIME="$d/uptime"; echo "12345.67 98765.43" > "$UPTIME"; wlg_clock; echo "now=$NOW"`);
+  assert.equal(out, lines("now=12345"));
 });
