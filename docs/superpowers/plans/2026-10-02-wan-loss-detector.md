@@ -1036,3 +1036,11 @@ git push origin main
 - [ ] **Step 10: Update memory**
 
 In `lte-fallback-priorities.md`, replace the "Still open (2026-10-02)" line with one stating that the detector has been live since `<date>`. Include the thresholds (10 s / ≥ 15 probes / ½ lost → hold; 120 s / ≥ 300 / ≤ 1 % → release; 30-min cap) and where it lives (`/usr/bin/wan-loss-guard`, procd, sysupgrade.conf). Add the Task 1 finding: whether `/proc/gl-kmwan/config` reflects `force_dead`, and whether kmwan hotplug fires. Add the rollback (`/etc/init.d/wan-loss-guard stop && … disable`). Update its `MEMORY.md` index line to mention the detector.
+
+## Task 1 outcome (2026-10-02)
+
+- config reflects force_dead: yes (`/proc/gl-kmwan/config` showed `wan:offline` 5 s after `force_dead wan`), so Task 4 is skipped
+- wan block while forced: `online:false`, `force_dead:true`
+- Flint egress while forced: `ip=47.64.112.154` (SIM); eth1 probes: 3/3 answered (14–28 ms)
+- kmwan hotplug fired on force_dead: yes (`kmwan-offline` at 19:22:29, `kmwan-online` at 19:22:37 after `restore_detect`)
+- after restore_detect: `wan:online`, `force_dead:false`, `ip=149.172.237.20`
