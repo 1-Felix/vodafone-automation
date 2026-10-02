@@ -180,6 +180,44 @@ and `docs/superpowers/plans/2026-07-27-spitz-callya-lte-failover.md`; balance +
 guard follow-up: `docs/superpowers/specs/2026-07-27-callya-balance-lte-guard-design.md`
 and `docs/superpowers/plans/2026-07-27-callya-balance-lte-guard.md`.
 
+### Cable loss detector (Flint)
+
+kmwan misses lossy blackouts, because its probes get just enough answers to
+call the cable online, and it fails back on the first answered probe.
+`flint/wan-loss-guard` runs on the Flint as a procd service and covers both:
+
+- Once a second it pings 9.9.9.9, 1.0.0.1 and 8.8.4.4 over `eth1`. kmwan
+  probes different targets, so the two views are independent.
+- When the last 10 s hold at least 15 probes and half of them were lost, it
+  runs `force_dead wan` and kmwan sends everything over LTE. It never does this
+  without a working LTE path: `secondwan` up in netifd and `secondwan:online`
+  in `/proc/gl-kmwan/config`.
+- It hands back with `restore_detect wan` after 2 min with ≥ 300 probes and
+  ≤ 1 % lost, at once if LTE goes away, and after 30 min at the latest.
+- Each transition goes to `/root/wan-events.log` (`detector-hold lost=n/sent`,
+  `detector-release clean|lte-unavailable|max-hold|stopped`) and to syslog
+  (`logread -e wan-loss-guard`), and wakes the monitor via `:8799/event`. The
+  monitor shows a hold as a normal failover.
+
+Install from the repo root:
+
+```bash
+ssh flint 'cat > /usr/bin/wan-loss-guard && chmod 755 /usr/bin/wan-loss-guard' < flint/wan-loss-guard
+ssh flint 'cat > /etc/init.d/wan-loss-guard && chmod 755 /etc/init.d/wan-loss-guard' < flint/wan-loss-guard.init
+ssh flint '/etc/init.d/wan-loss-guard enable && /etc/init.d/wan-loss-guard start'
+```
+
+Both files and the `S99`/`K10` links are listed in `/etc/sysupgrade.conf`.
+After a firmware upgrade, check `sysupgrade -l | grep wan-loss-guard` and
+`logread -e wan-loss-guard`. If GL ever drops `force_dead` from
+`/lib/functions/kmwan.sh`, the service refuses to start and logs why.
+Rollback: `/etc/init.d/wan-loss-guard stop && /etc/init.d/wan-loss-guard disable`.
+Stopping hands control back to kmwan. The shell tests also run under the
+Flint's busybox: `WLG_TEST_HOST=flint node --test src/wan-loss-guard.test.mjs`.
+
+Design and runbook: `docs/superpowers/specs/2026-10-02-wan-loss-detector-design.md`
+and `docs/superpowers/plans/2026-10-02-wan-loss-detector.md`.
+
 ## Tested on
 
 - **Router:** Vodafone Station (Arris CGA6444VF)
