@@ -191,11 +191,13 @@ call the cable online, and it fails back on the first answered probe.
 - When the last 10 s hold at least 15 probes and half of them were lost, it
   runs `force_dead wan` and kmwan sends everything over LTE. It never does this
   without a working LTE path: `secondwan` up in netifd and `secondwan:online`
-  in `/proc/gl-kmwan/config`.
+  in `/proc/gl-kmwan/config`. After a start it arms only once the cable has
+  answered, so a Flint reboot before `eth1` has its lease does not hold.
 - It hands back with `restore_detect wan` after 2 min with ≥ 300 probes and
   ≤ 1 % lost, at once if LTE goes away, and after 30 min at the latest.
 - Each transition goes to `/root/wan-events.log` (`detector-hold lost=n/sent`,
-  `detector-release clean|lte-unavailable|max-hold|stopped`) and to syslog
+  `detector-release clean|lte-unavailable|max-hold lost=n/sent` with the
+  2-min window it released on, or `detector-release stopped`) and to syslog
   (`logread -e wan-loss-guard`), and wakes the monitor via `:8799/event`. The
   monitor shows a hold as a normal failover.
 

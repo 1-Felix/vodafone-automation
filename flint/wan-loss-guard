@@ -26,6 +26,7 @@ EVENT_URL=http://192.168.0.37:8799/event
 STATE=watch       # watch: kmwan decides; hold: wan forced dead
 HOLD_START=0
 LAST_RELEASE=0
+ARMED=0           # 1 once the cable has answered since start
 HIST=""           # one "<second> <lost> <sent>" line per probe round, oldest first
 
 # Appends a probe round and drops rounds older than the release window.
@@ -58,6 +59,13 @@ wlg_step() { # <now> <lost> <sent>
   local now=$1 reason
   wlg_record "$now" "$2" "$3"
   if [ "$STATE" = watch ]; then
+    # After a start, wait until the cable has answered once: at boot eth1 may
+    # not have its lease yet, and holding then would keep the house on LTE for
+    # two minutes after the cable is up. Only rounds from then on count.
+    if [ "$ARMED" = 0 ]; then
+      [ "$2" -lt "$3" ] || return 0
+      ARMED=1 LAST_RELEASE=$(( now - 1 ))
+    fi
     # Only rounds after the last release count, or a release would re-trigger
     # on the loss that caused the hold.
     wlg_window "$now" "$TRIGGER_SECS" "$LAST_RELEASE"
@@ -83,7 +91,7 @@ wlg_step() { # <now> <lost> <sent>
   fi
   restore_detect "$WAN_IFACE"
   STATE=watch LAST_RELEASE=$now
-  wlg_event detector-release "$reason"
+  wlg_event detector-release "$reason lost=$W_LOST/$W_SENT"
 }
 
 # Seconds since boot: NTP fixing the wall clock after boot must not stretch or
