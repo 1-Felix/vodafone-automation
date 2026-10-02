@@ -14,8 +14,9 @@ start_service() {
 	procd_close_instance
 }
 
-# The guard restores kmwan's detection itself on SIGTERM; this covers procd
-# escalating to SIGKILL.
+# Runs right after the stop request, usually alongside the guard's own exit
+# handler. It is the backstop for when that handler never runs: a guard that
+# was already dead, or procd's SIGKILL 5 s after the SIGTERM.
 service_stopped() {
 	( . /lib/functions/kmwan.sh; restore_detect wan )
 }

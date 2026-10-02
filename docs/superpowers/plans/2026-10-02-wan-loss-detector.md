@@ -961,7 +961,7 @@ ssh nuc 'curl -s localhost:8799/api/status' | grep -o '"connState":"[A-Z_]*"'
 
 Expected: `"connState":"CABLE_OK"`. If Task 4 was skipped, the image only carries docs and tests, and Watchtower picks it up at the next :04 with nothing to do now.
 
-- [ ] **Step 3: Get the user's go-ahead for the acceptance run** (~5 min, best with Felix-PC idle). While held, every device except Felix-PC loses internet, and Discord gets a "Failover active" / "Failover ended" pair plus "LTE disarmed/armed" from step 8. Do not continue without it.
+- [ ] **Step 3: Get the user's go-ahead for the acceptance run** (~6 min, best with Felix-PC idle). While held, every device except Felix-PC loses internet, and Discord gets two "Failover active" / "Failover ended" pairs (steps 5–7 and 9) plus "LTE disarmed/armed" from step 8. Do not continue without it.
 
 - [ ] **Step 4: Fake a lossy line for the detector only** (kmwan's own targets keep answering, and a dead-man removes the rules after 10 min)
 
@@ -1014,7 +1014,25 @@ Expected:
 - second toggle returns `{"armed":true}`;
 - `"up": true`.
 
-- [ ] **Step 9: Record the acceptance outcome** by appending to this plan:
+- [ ] **Step 9: Stopping mid-hold hands the cable back** (added after the final review: the SIGTERM path was only unit-tested)
+
+```bash
+ssh flint 'n=0; until grep -qx secondwan:online /proc/gl-kmwan/config || [ $n -ge 60 ]; do sleep 1; n=$((n + 1)); done
+for t in 9.9.9.9 1.0.0.1 8.8.4.4; do iptables -I INPUT -i eth1 -p icmp --icmp-type echo-reply -s $t -j DROP; done
+( sleep 600; for t in 9.9.9.9 1.0.0.1 8.8.4.4; do iptables -D INPUT -i eth1 -p icmp --icmp-type echo-reply -s $t -j DROP; done ) </dev/null >/dev/null 2>&1 &
+sleep 15; tail -1 /root/wan-events.log
+/etc/init.d/wan-loss-guard stop; sleep 3
+tail -1 /root/wan-events.log; sed -n "/^wan /,/^\$/p" /proc/gl-kmwan/status | grep force_dead; pgrep -f /usr/bin/wan-loss-guard || echo stopped
+for t in 9.9.9.9 1.0.0.1 8.8.4.4; do iptables -D INPUT -i eth1 -p icmp --icmp-type echo-reply -s $t -j DROP; done
+/etc/init.d/wan-loss-guard start; sleep 2; pgrep -f /usr/bin/wan-loss-guard; iptables -L INPUT -n | grep -c "icmptype 0"'
+```
+
+Expected:
+- `wan detector-hold lost=n/sent` before the stop;
+- after the stop: `wan detector-release stopped`, `force_dead:false`, `stopped`;
+- after the start: a pid, and `0` DROP rules left.
+
+- [ ] **Step 10: Record the acceptance outcome** by appending to this plan:
 
 ```markdown
 ## Acceptance outcome (<date>)
@@ -1023,6 +1041,7 @@ Expected:
 - monitor: <connState>, Discord "Failover active": <yes|no>
 - release `clean` <n> s after clearing, egress <ip>; "Failover ended": <yes|no>
 - disarmed: new holds <n>; re-armed: <yes|no>
+- stopped mid-hold: `detector-release stopped` <yes|no>, `force_dead:false` <yes|no>, restarted <yes|no>
 ```
 
 Commit and push:
@@ -1033,9 +1052,9 @@ git commit -m "Plan: record the WAN loss detector acceptance run"
 git push origin main
 ```
 
-- [ ] **Step 10: Update memory**
+- [ ] **Step 11: Update memory**
 
-In `lte-fallback-priorities.md`, replace the "Still open (2026-10-02)" line with one stating that the detector has been live since `<date>`. Include the thresholds (10 s / ≥ 15 probes / ½ lost → hold; 120 s / ≥ 300 / ≤ 1 % → release; 30-min cap) and where it lives (`/usr/bin/wan-loss-guard`, procd, sysupgrade.conf). Add the Task 1 finding: whether `/proc/gl-kmwan/config` reflects `force_dead`, and whether kmwan hotplug fires. Add the rollback (`/etc/init.d/wan-loss-guard stop && … disable`). Update its `MEMORY.md` index line to mention the detector.
+In `lte-fallback-priorities.md`, replace the "Still open (2026-10-02)" line with one stating that the detector has been live since `<date>`. Include the thresholds (10 s / ≥ 27 probes / ½ lost → hold; 120 s / ≥ 300 / ≤ 1 % → release; 30-min cap) and where it lives (`/usr/bin/wan-loss-guard`, procd, sysupgrade.conf). Add the Task 1 finding: whether `/proc/gl-kmwan/config` reflects `force_dead`, and whether kmwan hotplug fires. Add the rollback (`/etc/init.d/wan-loss-guard stop && … disable`). Update its `MEMORY.md` index line to mention the detector.
 
 ## Task 1 outcome (2026-10-02)
 

@@ -207,10 +207,11 @@ Install from the repo root:
 ssh flint 'cat > /usr/bin/wan-loss-guard && chmod 755 /usr/bin/wan-loss-guard' < flint/wan-loss-guard
 ssh flint 'cat > /etc/init.d/wan-loss-guard && chmod 755 /etc/init.d/wan-loss-guard' < flint/wan-loss-guard.init
 ssh flint '/etc/init.d/wan-loss-guard enable && /etc/init.d/wan-loss-guard start'
+ssh flint 'for f in /usr/bin/wan-loss-guard /etc/init.d/wan-loss-guard /etc/rc.d/S99wan-loss-guard /etc/rc.d/K10wan-loss-guard; do grep -qx "$f" /etc/sysupgrade.conf || echo "$f" >> /etc/sysupgrade.conf; done'
 ```
 
-Both files and the `S99`/`K10` links are listed in `/etc/sysupgrade.conf`.
-After a firmware upgrade, check `sysupgrade -l | grep wan-loss-guard` and
+The last line keeps both files and the `S99`/`K10` links across firmware
+upgrades. After an upgrade, check `sysupgrade -l | grep wan-loss-guard` and
 `logread -e wan-loss-guard`. If GL ever drops `force_dead` from
 `/lib/functions/kmwan.sh`, the service refuses to start and logs why.
 Rollback: `/etc/init.d/wan-loss-guard stop && /etc/init.d/wan-loss-guard disable`.

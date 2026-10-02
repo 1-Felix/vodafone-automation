@@ -104,9 +104,9 @@ wlg_clock() {
 
 # LTE can carry traffic: netifd has secondwan up (it is down while disarmed on
 # the dashboard) and kmwan lists it online. A missing line means offline, as
-# in GL's own kmwan.lua.
+# in GL's own kmwan.lua. A netifd that takes over 2 s to answer counts as no LTE.
 wlg_lte_ok() {
-  ubus call "network.interface.$LTE_IFACE" status 2>/dev/null | grep -q '"up": true' &&
+  ubus -t 2 call "network.interface.$LTE_IFACE" status 2>/dev/null | grep -q '"up": true' &&
     grep -qx "$LTE_IFACE:online" "$KMWAN_CONFIG" 2>/dev/null
 }
 
@@ -146,20 +146,23 @@ wlg_event() { # <action> <detail>
       -d "{\"iface\":\"$WAN_IFACE\",\"action\":\"$1\"}" >/dev/null 2>&1 & )
 }
 
-# SIGTERM from procd: hand the cable back to kmwan before exiting.
+# Hands the cable back to kmwan however the loop ends: procd's SIGTERM, Ctrl-C
+# or a shell error. Only SIGKILL skips it; service_stopped and the restore at
+# the next start cover that.
 wlg_shutdown() {
   restore_detect "$WAN_IFACE"
   [ "$STATE" = hold ] && wlg_event detector-release stopped
-  exit 0
 }
 
 wlg_main() {
-  . "$KMWAN_LIB"
+  # A failed `.` would end the shell before it could say why.
+  [ -r "$KMWAN_LIB" ] && . "$KMWAN_LIB"
   if ! type force_dead >/dev/null 2>&1; then
     logger -t wan-loss-guard "$KMWAN_LIB has no force_dead; not starting"
     exit 1
   fi
-  trap wlg_shutdown INT TERM
+  trap wlg_shutdown EXIT
+  trap 'exit 0' INT TERM
   # A crash or a kill -9 may have left wan forced; start from kmwan's own view.
   restore_detect "$WAN_IFACE"
   local sent start lost

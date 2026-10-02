@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -13,15 +13,19 @@ const HOST = process.env.WLG_TEST_HOST;
 const HAS_SH = Boolean(HOST) || !spawnSync("sh", ["-c", "true"]).error;
 const opts = { skip: HAS_SH ? false : "no POSIX sh on this machine" };
 
+// On the remote host the guard goes to a private temp file, removed after the run.
 let remoteGuard;
 function guardPath() {
   if (!HOST) return GUARD;
   if (!remoteGuard) {
-    execFileSync("ssh", [HOST, "cat > /tmp/wan-loss-guard"], { input: readFileSync(GUARD) });
-    remoteGuard = "/tmp/wan-loss-guard";
+    const copy = 'f=$(mktemp) && cat > "$f" && echo "$f"';
+    remoteGuard = execFileSync("ssh", [HOST, copy], { input: readFileSync(GUARD), encoding: "utf8" }).trim();
   }
   return remoteGuard;
 }
+after(() => {
+  if (remoteGuard) execFileSync("ssh", [HOST, `rm -f '${remoteGuard}'`]);
+});
 
 // Runs `body` with the guard sourced (its loop only starts when executed as
 // wan-loss-guard, so sourcing just defines the functions) and `$d` as a
@@ -177,7 +181,7 @@ test("LTE counts as available only when netifd has secondwan up and kmwan lists 
   const out = sh(`
 KMWAN_CONFIG="$d/config"
 UP=true
-ubus() { [ "$*" = "call network.interface.secondwan status" ] && printf '{\\n\\t"up": %s,\\n\\t"pending": false\\n}\\n' "$UP"; }
+ubus() { [ "$*" = "-t 2 call network.interface.secondwan status" ] && printf '{\\n\\t"up": %s,\\n\\t"pending": false\\n}\\n' "$UP"; }
 check() { if wlg_lte_ok; then echo "$1=yes"; else echo "$1=no"; fi; }
 printf 'wan:online\\nsecondwan:online\\n' > "$KMWAN_CONFIG"; check armed
 UP=false; check disarmed
@@ -223,14 +227,45 @@ cat "$EVENT_LOG" "$d/side"
   );
 });
 
-test("stopping hands the cable back to kmwan and closes an open hold in the log", opts, () => {
-  const out = sh(`
+// Runs wlg_main as its own process against a stub kmwan.sh, with `step` as the
+// body of wlg_step. `then` runs meanwhile, with the loop's pid in $pid.
+function main(step, then) {
+  return sh(`
+cat > "$d/kmwan.sh" <<'EOF'
+force_dead() { echo "force_dead $1"; }
 restore_detect() { echo "restore_detect $1"; }
+EOF
+cat > "$d/run" <<'EOF'
+. '${guardPath()}'
+KMWAN_LIB="$d/kmwan.sh"
+wlg_clock() { NOW=1; }
+wlg_probe() { echo 3; }
 wlg_event() { echo "event $1 $2"; }
-(STATE=hold; wlg_shutdown); echo "exit=$?"
-(STATE=watch; wlg_shutdown); echo "exit=$?"
+wlg_step() { ${step}; }
+wlg_main
+EOF
+d="$d" sh "$d/run" > "$d/out" 2>&1 &
+pid=$!
+${then}
+wait "$pid"; echo "exit=$?"
+cat "$d/out"
 `);
-  assert.equal(out, lines("restore_detect wan", "event detector-release stopped", "exit=0", "restore_detect wan", "exit=0"));
+}
+
+test("SIGTERM mid-hold hands the cable back to kmwan and closes the hold in the log", opts, () => {
+  // Exactly one restore before the stop: a round's subshells must not run the
+  // exit handler, or every probe would undo the hold.
+  const out = main(
+    `STATE=hold; : > "$d/ready"`,
+    `n=0; while [ ! -e "$d/ready" ] && [ $n -lt 20 ]; do sleep 1; n=$((n + 1)); done; sleep 2; kill -TERM "$pid"`,
+  );
+  assert.equal(out, lines("exit=0", "restore_detect wan", "restore_detect wan", "event detector-release stopped"));
+});
+
+test("a loop that dies still hands the cable back, keeping its exit status for procd", opts, () => {
+  // procd stops respawning after 5 deaths an hour; the last one must not leave wan forced.
+  const out = main(`STATE=hold; exit 3`, ":");
+  assert.equal(out, lines("exit=3", "restore_detect wan", "restore_detect wan", "event detector-release stopped"));
 });
 
 test("refuses to start when kmwan.sh has no force_dead (e.g. after a firmware upgrade)", opts, () => {
@@ -240,6 +275,15 @@ logger() { echo "logger $*"; }
 (wlg_main); echo "exit=$?"
 `);
   assert.match(out, /^logger -t wan-loss-guard \S+\/kmwan\.sh has no force_dead; not starting\nexit=1\n$/);
+});
+
+test("refuses to start when kmwan.sh is missing", opts, () => {
+  const out = sh(`
+KMWAN_LIB="$d/missing.sh"
+logger() { echo "logger $*"; }
+(wlg_main) 2>/dev/null; echo "exit=$?"
+`);
+  assert.match(out, /^logger -t wan-loss-guard \S+\/missing\.sh has no force_dead; not starting\nexit=1\n$/);
 });
 
 test("the clock is whole seconds since boot, immune to NTP jumps", opts, () => {
