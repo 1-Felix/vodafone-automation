@@ -17,9 +17,22 @@ export function costEur(bytes, ratePerMb = RATE_PER_MB) {
   return (bytes / 1e6) * ratePerMb;
 }
 
-export function deriveConnState({ wanUp, lteUp }) {
-  if (wanUp) return "CABLE_OK";
+// wanOnline is kmwan's verdict (null when unknown, then netifd's word stands).
+export function deriveConnState({ wanUp, wanOnline, lteUp }) {
+  if (wanUp && wanOnline !== false) return "CABLE_OK";
   return lteUp ? "LTE_ACTIVE" : "ALL_DOWN";
+}
+
+// kmwan calls the cable online again on the first answered probe, and a modem
+// that is still re-ranging answers a few before it carries traffic (2026-10-02:
+// four flips in 30 s). Hold the failover until the cable has stayed online
+// this long, so a flapping failback stays one session.
+export const FAILBACK_SETTLE_MS = 120_000;
+
+export function settleConnState({ raw, prev, cableOkSince, now }) {
+  if (raw !== "CABLE_OK" || prev !== "LTE_ACTIVE") return { connState: raw, cableOkSince: null };
+  const since = cableOkSince ?? now;
+  return { connState: now - since < FAILBACK_SETTLE_MS ? "LTE_ACTIVE" : "CABLE_OK", cableOkSince: since };
 }
 
 export function nextSampleDelayMs(connState) {

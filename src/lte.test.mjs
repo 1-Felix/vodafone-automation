@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  deltaBytes, costEur, deriveConnState, nextSampleDelayMs,
-  aggregateUsage, isDrillDue, shouldSendRunningUpdate,
+  deltaBytes, costEur, deriveConnState, nextSampleDelayMs, settleConnState,
+  aggregateUsage, isDrillDue, shouldSendRunningUpdate, FAILBACK_SETTLE_MS,
 } from "./lte.mjs";
 
 test("deltaBytes: first sample establishes baseline", () => {
@@ -27,6 +27,42 @@ test("deriveConnState", () => {
   assert.equal(deriveConnState({ wanUp: true, lteUp: true }), "CABLE_OK");
   assert.equal(deriveConnState({ wanUp: false, lteUp: true }), "LTE_ACTIVE");
   assert.equal(deriveConnState({ wanUp: false, lteUp: false }), "ALL_DOWN");
+});
+
+test("deriveConnState: an up wan that kmwan tracks offline carries no traffic", () => {
+  // DOCSIS offline: the Station hands the Flint a 192.168.100.x fallback lease,
+  // netifd calls wan up, kmwan's pings fail and traffic rides LTE.
+  assert.equal(deriveConnState({ wanUp: true, wanOnline: false, lteUp: true }), "LTE_ACTIVE");
+  assert.equal(deriveConnState({ wanUp: true, wanOnline: false, lteUp: false }), "ALL_DOWN");
+  assert.equal(deriveConnState({ wanUp: true, wanOnline: true, lteUp: true }), "CABLE_OK");
+  // No kmwan verdict (file unreadable, kmwan disabled): netifd is all we have.
+  assert.equal(deriveConnState({ wanUp: true, wanOnline: null, lteUp: true }), "CABLE_OK");
+});
+
+test("settleConnState: failback holds the failover until the cable has stayed up", () => {
+  const t0 = 1_000_000;
+  const first = settleConnState({ raw: "CABLE_OK", prev: "LTE_ACTIVE", cableOkSince: null, now: t0 });
+  assert.deepEqual(first, { connState: "LTE_ACTIVE", cableOkSince: t0 });
+  const early = settleConnState({ raw: "CABLE_OK", prev: "LTE_ACTIVE", cableOkSince: t0, now: t0 + FAILBACK_SETTLE_MS - 1 });
+  assert.deepEqual(early, { connState: "LTE_ACTIVE", cableOkSince: t0 });
+  const settled = settleConnState({ raw: "CABLE_OK", prev: "LTE_ACTIVE", cableOkSince: t0, now: t0 + FAILBACK_SETTLE_MS });
+  assert.deepEqual(settled, { connState: "CABLE_OK", cableOkSince: t0 }, "keeps the failback time for the session end");
+});
+
+test("settleConnState: a relapse during the settle window restarts it", () => {
+  const relapse = settleConnState({ raw: "LTE_ACTIVE", prev: "LTE_ACTIVE", cableOkSince: 5, now: 10 });
+  assert.deepEqual(relapse, { connState: "LTE_ACTIVE", cableOkSince: null });
+});
+
+test("settleConnState: only a failback is held, every other state passes straight through", () => {
+  assert.deepEqual(settleConnState({ raw: "CABLE_OK", prev: "CABLE_OK", cableOkSince: 7, now: 10 }),
+    { connState: "CABLE_OK", cableOkSince: null });
+  assert.deepEqual(settleConnState({ raw: "CABLE_OK", prev: undefined, cableOkSince: null, now: 10 }),
+    { connState: "CABLE_OK", cableOkSince: null });
+  assert.deepEqual(settleConnState({ raw: "CABLE_OK", prev: "ALL_DOWN", cableOkSince: null, now: 10 }),
+    { connState: "CABLE_OK", cableOkSince: null });
+  assert.deepEqual(settleConnState({ raw: "ALL_DOWN", prev: "LTE_ACTIVE", cableOkSince: 5, now: 10 }),
+    { connState: "ALL_DOWN", cableOkSince: null });
 });
 
 test("nextSampleDelayMs: fast only while LTE active", () => {

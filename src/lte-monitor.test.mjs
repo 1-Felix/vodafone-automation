@@ -16,6 +16,7 @@ function fakeFlint(script) {
   return {
     advance: () => i++,
     getIfaceStatus: async (iface) => cur()[iface],
+    getKmwanStatus: async () => cur().kmwan ?? null,
     readCellularCounters: async () => cur().counter,
     setLteArmed: async (up) => { cur().armedSet = up; },
     setModemUp: async (up) => { cur().modemSet = up; },
@@ -35,8 +36,10 @@ test("failover session lifecycle produces alerts and usage", async () => {
     { wan: { up: true, autostart: true }, secondwan: { up: true, autostart: true, device: "lan5" }, counter: 5_001_000 },
   ];
   const flint = fakeFlint(script);
+  const { FAILBACK_SETTLE_MS } = await import("./lte.mjs");
+  const clock = steppedClock("2026-10-02T09:00:00.000Z");
   const sent = [];
-  const m = startLteMonitor({ flint, spitz: flint,send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
+  const m = startLteMonitor({ flint, spitz: flint, nowIso: clock.nowIso, send: async (msg, color) => sent.push({ msg, color }), autoStart: false });
 
   await m.tick(); flint.advance(); // baseline, CABLE_OK
   await m.tick(); flint.advance(); // wan down → LTE_ACTIVE
@@ -46,11 +49,99 @@ test("failover session lifecycle produces alerts and usage", async () => {
   const status = await m.getStatus();
   assert.equal(status.session.bytes, 5_000_000);
   assert.equal(status.connState, "LTE_ACTIVE");
-  await m.tick(); // wan back → session closed
+  await m.tick();                  // wan back → failback settling
+  assert.ok(!sent.some((s) => /Failover ended/.test(s.msg)), "not ended before the cable has stayed up");
+  clock.advance(FAILBACK_SETTLE_MS);
+  await m.tick();                  // stayed up → session closed
   assert.ok(sent.some((s) => /Failover ended/.test(s.msg) && /5\.0 MB/.test(s.msg)));
   assert.equal((await m.getStatus()).session, null);
   const totals = (await m.getStatus()).totals;
   assert.equal(totals.total.bytes, 5_000_000);
+});
+
+// The 2026-10-02 outage: DOCSIS dropped, the Station bounced eth1 and then
+// leased the Flint 192.168.100.6 from its own fallback DHCP. netifd called wan
+// up within seconds while kmwan kept routing over LTE for ten more minutes.
+const UP = { up: true, autostart: true };
+const LTE = { up: true, autostart: true, device: "lan5" };
+const KM_OFFLINE = { wan: "offline", secondwan: "online" };
+const KM_ONLINE = { wan: "online", secondwan: "online" };
+
+function steppedClock(startIso) {
+  let ms = Date.parse(startIso);
+  return { nowIso: () => new Date(ms).toISOString(), advance: (d) => { ms += d; } };
+}
+
+test("a wan that is up on the Station's fallback lease but tracked offline keeps the failover open", async () => {
+  const script = [
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 0 },
+    { wan: UP, secondwan: LTE, kmwan: KM_OFFLINE, counter: 0 },
+    { wan: UP, secondwan: LTE, kmwan: KM_OFFLINE, counter: 27_000_000 },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, spitz: flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+
+  await m.tick(); flint.advance(); // cable healthy
+  await m.tick(); flint.advance(); // kmwan fails over, netifd still says up
+  await m.tick();                  // 27 MB over LTE during the outage
+
+  const status = await m.getStatus();
+  assert.equal(status.connState, "LTE_ACTIVE");
+  assert.equal(status.session.bytes, 27_000_000, "outage traffic belongs to the failover session");
+  assert.ok(sent.some((s) => /Failover active/.test(s.msg)));
+  assert.ok(!sent.some((s) => /background/i.test(s.msg)), "outage traffic is not a background leak");
+});
+
+test("bytes metered on the tick that opens the failover belong to the session", async () => {
+  // The hotplug-triggered tick lands seconds after the switch, so nearly all of
+  // what accrued since the previous tick is failover traffic, not background.
+  const script = [
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 0 },
+    { wan: { up: false, autostart: true }, secondwan: LTE, counter: 4_000_000 },
+  ];
+  const flint = fakeFlint(script);
+  const sent = [];
+  const m = startLteMonitor({ flint, spitz: flint, send: async (msg, color, tier) => sent.push({ msg, color, tier }), autoStart: false });
+
+  await m.tick(); flint.advance();
+  await m.tick();
+
+  assert.equal((await m.getStatus()).session.bytes, 4_000_000);
+  assert.ok(!sent.some((s) => /background/i.test(s.msg)), "no leak alert for the failover's own bytes");
+});
+
+test("a failback that flaps inside the settle window stays one failover session", async () => {
+  const { FAILBACK_SETTLE_MS } = await import("./lte.mjs");
+  const script = [
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 0 },
+    { wan: UP, secondwan: LTE, kmwan: KM_OFFLINE, counter: 0 },
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 1_000_000 },
+    { wan: UP, secondwan: LTE, kmwan: KM_OFFLINE, counter: 2_000_000 },
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 3_000_000 },
+    { wan: UP, secondwan: LTE, kmwan: KM_ONLINE, counter: 3_000_000 },
+  ];
+  const flint = fakeFlint(script);
+  const clock = steppedClock("2026-10-02T09:10:00.000Z");
+  const sent = [];
+  const m = startLteMonitor({
+    flint, spitz: flint, nowIso: clock.nowIso, autoStart: false,
+    send: async (msg, color, tier) => sent.push({ msg, color, tier }),
+  });
+
+  await m.tick(); flint.advance(); clock.advance(60_000);                // cable healthy
+  await m.tick(); flint.advance(); clock.advance(60_000);                // failover
+  await m.tick(); flint.advance(); clock.advance(30_000);                // kmwan: back online
+  assert.equal((await m.getStatus()).connState, "LTE_ACTIVE", "not trusted until settled");
+  await m.tick(); flint.advance(); clock.advance(30_000);                // relapse
+  await m.tick(); flint.advance(); clock.advance(FAILBACK_SETTLE_MS);    // back online
+  await m.tick();                                                        // stayed up → ended
+
+  assert.equal(sent.filter((s) => /Failover active/.test(s.msg)).length, 1, "one failover announced");
+  const ended = sent.filter((s) => /Failover ended/.test(s.msg));
+  assert.equal(ended.length, 1, "one failover summary");
+  assert.match(ended[0].msg, /after 2 min — 3\.0 MB/, "duration runs to the failback, not to the settle");
+  assert.equal((await m.getStatus()).connState, "CABLE_OK");
 });
 
 test("dead Spitz link marks backup broken and recovers on relink", async () => {

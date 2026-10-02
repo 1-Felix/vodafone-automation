@@ -34,6 +34,20 @@ export async function getIfaceStatus(iface) {
   return parseIfaceStatus(await flintSsh(`ubus call network.interface.${iface} status`));
 }
 
+// kmwan's tracker verdict per member ("wan:online"), which is what decides
+// where traffic goes. netifd's `up` only means wan holds a lease, and while
+// DOCSIS is offline the Station leases 192.168.100.x from its own DHCP.
+// kmwan drops a member's line on ifdown, which GL reads as offline.
+export function parseKmwanStatus(text) {
+  const status = {};
+  for (const [, name, state] of (text ?? "").matchAll(/^([\w-]+):(\w+)\s*$/gm)) status[name] = state;
+  return Object.keys(status).length ? status : null;
+}
+
+export async function getKmwanStatus() {
+  return parseKmwanStatus(await flintSsh("cat /proc/gl-kmwan/config 2>/dev/null; true"));
+}
+
 export async function setLteArmed(up) {
   await flintSsh(`${up ? "ifup" : "ifdown"} ${LTE_IFACE}`);
 }

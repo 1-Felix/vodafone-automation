@@ -127,6 +127,15 @@ member `secondwan`):
   `src/ui/` as plain `index.html` / `app.css` / `app.js`; `dashboard.mjs` inlines
   the three into one self-contained document at startup — no build step, no CDN,
   so it renders fine while the cable is down.
+- Failover detection follows kmwan's tracker (`/proc/gl-kmwan/config`), not
+  netifd's `up`: while DOCSIS is offline the Station leases the Flint a
+  `192.168.100.x` address from its own DHCP, so `wan` reads up while kmwan keeps
+  routing over LTE (2026-10-02: a 13-min outage showed up as four 1-min
+  failovers and a false "leak"). A failback only ends the session once the cable
+  has stayed online for 2 min (`FAILBACK_SETTLE_MS`), so flaps stay one session.
+  Two Flint hooks wake the monitor: `/etc/hotplug.d/iface/99-wanlog` (netifd
+  ifup/ifdown) and `/etc/hotplug.d/kmwan/99-wanlog` (kmwan online/offline);
+  both are listed in `/etc/sysupgrade.conf`.
 - Discord alerts: failover started/ended with cost summary, 30-min running
   updates, arm/disarm, backup-broken (health ping every 10 min), monthly drill.
 - Monthly drill (1st, ~04:00): pulls ~2 MB through LTE to verify the path and

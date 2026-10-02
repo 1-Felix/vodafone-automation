@@ -6,7 +6,7 @@ import * as realFlint from "./flint.mjs";
 import * as realSpitz from "./spitz.mjs";
 import {
   aggregateUsage, assessReadiness, backgroundBytes, computeBalance, costEur, deltaBytes, deriveConnState,
-  deriveLteAlerts, fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, shouldAutoDisarm,
+  deriveLteAlerts, fmtEur, fmtMb, isDrillDue, nextSampleDelayMs, settleConnState, shouldAutoDisarm,
   shouldSendRunningUpdate, BALANCE_LOW_EUR, BALANCE_RESERVE_EUR, LINK_GRACE_MS, SLOW_SAMPLE_MS,
 } from "./lte.mjs";
 
@@ -61,6 +61,7 @@ export function startLteMonitor(deps = {}) {
   let lastCounter = null;
   let lastHealthAt = 0;
   let lteDownSince = null;
+  let cableOkSince = null; // epoch ms the cable came back while a failover settles
   let backupOk = undefined;
   let lastRunningUpdateAt = null;
   let lastTickTs = null;
@@ -68,18 +69,35 @@ export function startLteMonitor(deps = {}) {
 
   async function tick() {
     const ts = nowIso();
-    const now = Date.now();
-    const [wan, lte] = await Promise.all([
+    const now = Date.parse(ts);
+    const [wan, lte, kmwan] = await Promise.all([
       flint.getIfaceStatus("wan"),
       flint.getIfaceStatus(LTE_IFACE),
+      flint.getKmwanStatus(),
     ]);
     const armed = !!lte.autostart;
 
     const counter = await spitz.readCellularCounters();
     const delta = counter === null ? 0 : deltaBytes(lastCounter, counter);
     if (counter !== null) lastCounter = counter;
+
+    const settled = settleConnState({
+      raw: deriveConnState({ wanUp: wan.up, wanOnline: kmwan ? kmwan.wan === "online" : null, lteUp: lte.up }),
+      prev: alertState.connState,
+      cableOkSince,
+      now,
+    });
+    const connState = settled.connState;
+    cableOkSince = settled.cableOkSince;
+
+    if (connState === "LTE_ACTIVE" && !session) {
+      session = { startTs: ts, bytes: 0 };
+      lastRunningUpdateAt = now; // first running update 30 min in, not at start
+    }
+
     if (delta > 0) {
-      // Bytes metered while a session is running belong to the failover; the
+      // Bytes metered while a session is open belong to the failover, including
+      // the tick that opens it: that one lands seconds after the switch. The
       // rest is background spend the leak watchdog totals per day.
       const entry = session ? { ts, bytes: delta, s: 1 } : { ts, bytes: delta };
       appendFileSync(USAGE_FILE, JSON.stringify(entry) + "\n");
@@ -87,14 +105,11 @@ export function startLteMonitor(deps = {}) {
       if (session) session.bytes += delta;
     }
 
-    const connState = deriveConnState({ wanUp: wan.up, lteUp: lte.up });
-
     let closedSession = null;
-    if (connState === "LTE_ACTIVE" && !session) {
-      session = { startTs: ts, bytes: 0 };
-      lastRunningUpdateAt = now; // first running update 30 min in, not at start
-    } else if (connState !== "LTE_ACTIVE" && session) {
-      closedSession = { ...session, endTs: ts };
+    if (connState !== "LTE_ACTIVE" && session) {
+      // A settled failback ended when the cable came back, not at the settle tick.
+      const endTs = cableOkSince ? new Date(cableOkSince).toISOString() : ts;
+      closedSession = { ...session, endTs };
       const rec = { ...closedSession, costEur: costEur(closedSession.bytes) };
       appendFileSync(SESSIONS_FILE, JSON.stringify(rec) + "\n");
       sessions.push(rec);
@@ -304,7 +319,7 @@ export function startLteMonitor(deps = {}) {
       guardOpenUntil = null;
       await flint.relockGuard();
     } else if (s === "locked") {
-      guardOpenUntil = Date.now() + GUARD_OPEN_MS;
+      guardOpenUntil = Date.parse(nowIso()) + GUARD_OPEN_MS;
       await flint.openGuard();
     } else {
       await flint.relockGuard(); // "missing": try to rebuild from the include script

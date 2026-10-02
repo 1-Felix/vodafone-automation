@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { GUARD_STATE_CMD, parseGuardState, parseIfaceStatus } from "./flint.mjs";
+import { GUARD_STATE_CMD, parseGuardState, parseIfaceStatus, parseKmwanStatus } from "./flint.mjs";
 
 test("parseIfaceStatus reads up/autostart/l3_device", () => {
   const s = parseIfaceStatus(JSON.stringify({ up: true, autostart: true, l3_device: "lan5" }));
@@ -14,6 +14,18 @@ test("parseIfaceStatus reads up/autostart/l3_device", () => {
 test("parseIfaceStatus handles down iface without device", () => {
   const s = parseIfaceStatus(JSON.stringify({ up: false, autostart: false }));
   assert.deepEqual(s, { up: false, autostart: false, device: null });
+});
+
+test("parseKmwanStatus reads kmwan's verdict per member", () => {
+  assert.deepEqual(parseKmwanStatus("wan:online\nsecondwan:online\n"), { wan: "online", secondwan: "online" });
+  assert.deepEqual(parseKmwanStatus("wan:offline\nsecondwan:online\n"), { wan: "offline", secondwan: "online" });
+});
+
+test("parseKmwanStatus: no file means no verdict, a dropped member means offline", () => {
+  // kmwan deletes a member's node on netifd ifdown; GL's own kmwan.lua reads
+  // an absent line as offline. No output at all means kmwan isn't running.
+  assert.equal(parseKmwanStatus(""), null);
+  assert.deepEqual(parseKmwanStatus("secondwan:online\n"), { secondwan: "online" });
 });
 
 
